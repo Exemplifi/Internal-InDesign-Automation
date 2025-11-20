@@ -157,79 +157,86 @@ try {
     // Call table converter
     convertTaggedTables(story, "Table Style");
 
-    // ---- 9b) Insert external INDD case studies via [CASESTUDY] / [CASE STUDY] ----
-    function insertCaseStudies(storyRef) {
-        // Supports both [CASESTUDY] and [CASE STUDY]
-        var re = /\[CASE ?STUDY\]([\s\S]*?)\[\/CASE ?STUDY\]/g;
-        var matches = [], m;
-        var fullText = storyRef.contents;
+   // ---- 9b) Insert external INDD case studies via [CASESTUDY] / [CASE STUDY] ----
+function insertCaseStudies(storyRef) {
 
-        while ((m = re.exec(fullText)) !== null) {
-            matches.push({
-                start: m.index,
-                fullLen: m[0].length,
-                inner: m[1]
-            });
+    // Supports both [CASESTUDY] and [CASE STUDY]
+    var re = /\[CASE ?STUDY\]([\s\S]*?)\[\/CASE ?STUDY\]/g;
+    var matches = [], m;
+    var fullText = storyRef.contents;
+
+    while ((m = re.exec(fullText)) !== null) {
+        matches.push({
+            start: m.index,
+            fullLen: m[0].length,
+            inner: m[1]
+        });
+    }
+    if (!matches.length) return;
+
+    // Process from end → start
+    for (var i = matches.length - 1; i >= 0; i--) {
+        var block = matches[i];
+
+        // Clean the filepath
+        var path = block.inner.replace(/^\s+|\s+$/g, "");
+        if (!path) continue;
+
+        var inddFile = File(path);
+        if (!inddFile.exists) {
+            alert("Case Study INDD not found:\n" + path);
+            continue;
         }
-        if (!matches.length) return;
 
-        // Process from end → start so earlier indices remain valid
-        for (var i = matches.length - 1; i >= 0; i--) {
-            var block = matches[i];
+        var start = block.start;
+        var end   = start + block.fullLen - 1;
 
-            // Extract and clean the path line
-            var path = block.inner.replace(/^\s+|\s+$/g, "");
-            if (!path) continue;
+        // ---- CRITICAL FIX: Capture page BEFORE modifying story ----
+        var ip = storyRef.characters[start];
+        var parentPage = null;
 
-            var inddFile = File(path);
-            if (!inddFile.exists) {
-                alert("Case Study INDD not found:\n" + path);
-                continue;
+        try {
+            var tf = ip.parentTextFrames[0];
+            parentPage = tf.parentPage;
+        } catch (_) {
+            parentPage = null;
+        }
+
+        // ---- Remove the block safely ----
+        var range = storyRef.characters.itemByRange(start, end);
+        range.remove();
+
+        // ---- Insert INDD pages ----
+        var sourceDoc = app.open(inddFile, false);
+
+        try {
+            if (parentPage) {
+                var insertAfter = parentPage;
+
+                // Duplicate pages one by one to maintain order
+                for (var p = 0; p < sourceDoc.pages.length; p++) {
+                    var newPage =
+                        sourceDoc.pages[p].duplicate(LocationOptions.AFTER, insertAfter);
+                    insertAfter = newPage;
+                }
+
+            } else {
+                // Fallback: append at end
+                for (var p2 = 0; p2 < sourceDoc.pages.length; p2++) {
+                    sourceDoc.pages[p2].duplicate(LocationOptions.AT_END, doc.pages[-1]);
+                }
             }
 
-            var start = block.start;
-            var end   = start + block.fullLen - 1;
-
-            // Capture insertion point's page BEFORE removal
-            var ip = storyRef.insertionPoints[start];
-            var parentPage = null;
-            try {
-                if (ip.parentTextFrames.length > 0) {
-                    parentPage = ip.parentTextFrames[0].parentPage;
-                }
-            } catch (_) {}
-
-            // Remove the entire [CASESTUDY]...[/CASESTUDY] text block
-            var range = storyRef.characters.itemByRange(start, end);
-            range.remove();
-
-            // Open the source INDD quietly
-            var sourceDoc = app.open(inddFile, false);
-
-            try {
-                // Insert its pages after the page that contained the tag
-                if (parentPage) {
-                    var insertAfterPage = parentPage;
-                    for (var p = 0; p < sourceDoc.pages.length; p++) {
-                        var newPage = sourceDoc.pages[p].duplicate(LocationOptions.AFTER, insertAfterPage);
-                        insertAfterPage = newPage; // keep order contiguous
-                    }
-                } else {
-                    // Fallback: append at end
-                    for (var p2 = 0; p2 < sourceDoc.pages.length; p2++) {
-                        sourceDoc.pages[p2].duplicate(LocationOptions.AT_END, doc.pages[-1]);
-                    }
-                }
-            } catch (_) {
-                // Silent fail per block; we already alerted for missing files.
-            } finally {
-                sourceDoc.close(SaveOptions.NO);
-            }
+        } catch (e) {
+            $.writeln("Case study insertion error: " + e);
+        } finally {
+            sourceDoc.close(SaveOptions.NO);
         }
     }
+}
 
-    // Call case study inserter
-    insertCaseStudies(story);
+// Call case study inserter
+insertCaseStudies(story);
 
     // ---- 10) Hyperlink Highlight (robust) ----
     if (cs.link) {
