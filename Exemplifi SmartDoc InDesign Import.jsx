@@ -146,17 +146,24 @@ try {
                 if (parentFrame) {
                     var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                     var tableWidth = tbl.width;
-                    // If table is wider than frame, resize it to fit
-                    if (tableWidth > frameWidth) {
-                        tbl.width = frameWidth - 20; // Leave small margin
-                        $.writeln("Pre-threading: Resized table " + t + " from " + tableWidth + " to " + tbl.width);
+                    // If table is wider than frame (or close to it), resize it to fit
+                    // Use 90% threshold to catch tables that are just slightly too wide
+                    if (tableWidth > frameWidth * 0.9) {
+                        var newWidth = frameWidth - 20; // Leave small margin
+                        tbl.width = newWidth;
+                        $.writeln("Pre-threading: Resized table " + t + " from " + tableWidth.toFixed(2) + " to " + newWidth.toFixed(2) + " (frame: " + frameWidth.toFixed(2) + ")");
+                    } else {
+                        $.writeln("Pre-threading: Table " + t + " width OK (" + tableWidth.toFixed(2) + " <= " + (frameWidth * 0.9).toFixed(2) + ")");
                     }
+                } else {
+                    $.writeln("Pre-threading: Table " + t + " has no parent frame");
                 }
             } catch (e) {
                 $.writeln("Could not check/resize table " + t + " before threading: " + e);
             }
         }
         story.recompose(); // Update overflow state after table resizing
+        $.writeln("After table resizing: Overflow = " + (story.overflows ? "YES" : "NO"));
     }
 
     // ---- Continue threading pages with safety limits ----
@@ -227,12 +234,58 @@ try {
             $.writeln("  Iteration " + pageCount + ": Pages=" + doc.pages.length + ", Overflow=" + (story.overflows ? "YES" : "NO") + ", Containers=" + story.textContainers.length);
         }
         
-        // Check if overflow state changed - if it's been stable for 2 iterations, break
+        // Check if overflow state changed - if it's been stable, investigate
         if (story.overflows === lastOverflowState) {
             stableIterations++;
+            
+            // If overflow hasn't changed for 2 iterations, check if it's a table blocking flow
             if (stableIterations >= 2) {
-                $.writeln("Warning: Overflow state not changing after threading. Breaking to prevent infinite loop.");
-                break;
+                $.writeln("Warning: Overflow state not changing. Checking for blocking tables...");
+                
+                // Check if there are tables that might be blocking flow
+                var blockingTable = false;
+                try {
+                    for (var ti = 0; ti < story.tables.length; ti++) {
+                        var t = story.tables[ti];
+                        var tf = t.parentTextFrames[0];
+                        if (tf && tf.overflows) {
+                            // Table is in an overflowing frame - try to resize it more aggressively
+                            try {
+                                var frameWidth = tf.geometricBounds[3] - tf.geometricBounds[1];
+                                if (t.width > frameWidth * 0.9) {
+                                    t.width = frameWidth * 0.85; // More aggressive resize
+                                    $.writeln("  Aggressively resized blocking table " + ti + " to " + t.width);
+                                    story.recompose();
+                                    blockingTable = true;
+                                }
+                            } catch (e) {
+                                $.writeln("  Could not resize blocking table " + ti + ": " + e);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    $.writeln("  Error checking for blocking tables: " + e);
+                }
+                
+                // If we fixed a table, reset stable iterations and continue
+                if (blockingTable) {
+                    stableIterations = 0;
+                    lastOverflowState = story.overflows;
+                    continue; // Try again with resized table
+                }
+                
+                // If still no change after table fix attempt, continue for a few more iterations
+                // to allow content after the table to flow
+                if (stableIterations >= 5) {
+                    $.writeln("Warning: Overflow persists after " + stableIterations + " stable iterations. Continuing for content after table...");
+                    // Don't break yet - allow a few more iterations for text after table
+                }
+                
+                // Only break if we've tried many times and overflow still persists
+                if (stableIterations >= 10) {
+                    $.writeln("Breaking after " + stableIterations + " stable iterations. Content may still be in overflow.");
+                    break;
+                }
             }
         } else {
             stableIterations = 0;
@@ -245,6 +298,190 @@ try {
     
     $.writeln("Page threading complete. Iterations: " + pageCount + ", Final pages: " + doc.pages.length + ", Final overflow: " + (story.overflows ? "YES" : "NO"));
     
+    // If there's still overflow, try additional strategies to place remaining content
+    if (story.overflows && pageCount < maxPages) {
+        $.writeln("Attempting to place remaining overflow content...");
+        
+        // Try creating a few more pages with different strategy
+        var additionalAttempts = 0;
+        var maxAdditional = 20; // Limit additional attempts
+        
+        while (story.overflows && additionalAttempts < maxAdditional && (pageCount + additionalAttempts) < maxPages) {
+            try {
+                var last = doc.pages[-1];
+                var np = doc.pages.add(LocationOptions.AFTER, last);
+                var nf = makeFrame(np);
+                
+                // Try to thread from the last text container
+                var containers = story.textContainers;
+                if (containers.length > 0) {
+                    // Try all containers from last to first
+                    var threaded = false;
+                    for (var ac = containers.length - 1; ac >= 0; ac--) {
+                        try {
+                            containers[ac].nextTextFrame = nf;
+                            threaded = true;
+                            $.writeln("  Additional attempt " + (additionalAttempts + 1) + ": Threaded container " + ac);
+                            break;
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                    
+                    if (!threaded) {
+                        $.writeln("  Additional attempt " + (additionalAttempts + 1) + ": Could not thread any container");
+                        break; // No point continuing if we can't thread
+                    }
+                }
+                
+                story.recompose();
+                additionalAttempts++;
+                
+                // Check if we made progress
+                if (!story.overflows) {
+                    $.writeln("  Successfully placed remaining content after " + additionalAttempts + " additional attempts");
+                    break;
+                }
+            } catch (e) {
+                $.writeln("  Error in additional attempt " + (additionalAttempts + 1) + ": " + e);
+                break;
+            }
+        }
+        
+        pageCount += additionalAttempts;
+        $.writeln("Additional attempts: " + additionalAttempts + ", Total iterations: " + pageCount);
+    }
+    
+    // Final recompose after additional attempts
+    story.recompose();
+    
+    // Check for tables that couldn't be placed and add marker text
+    if (story.overflows && story.tables.length > 0) {
+        $.writeln("Checking for unplaced tables and adding markers...");
+        var unplacedTables = [];
+        
+        for (var ut = 0; ut < story.tables.length; ut++) {
+            try {
+                var tbl = story.tables[ut];
+                var parentFrame = tbl.parentTextFrames[0];
+                
+                // Check if table is in an overflowing frame or if we can't access it
+                var isUnplaced = false;
+                try {
+                    if (parentFrame && parentFrame.overflows) {
+                        isUnplaced = true;
+                    }
+                } catch (e) {
+                    // If we can't access the parent frame, table might be in overflow
+                    isUnplaced = true;
+                }
+                
+                if (isUnplaced) {
+                    unplacedTables.push({
+                        table: tbl,
+                        index: ut,
+                        parentFrame: parentFrame
+                    });
+                    $.writeln("  Table " + ut + " appears to be unplaced");
+                }
+            } catch (e) {
+                $.writeln("  Error checking table " + ut + ": " + e);
+            }
+        }
+        
+        // Insert marker text for each unplaced table
+        if (unplacedTables.length > 0) {
+            // Process from end to start to maintain character indices
+            for (var ui = unplacedTables.length - 1; ui >= 0; ui--) {
+                try {
+                    var unplaced = unplacedTables[ui];
+                    var tbl = unplaced.table;
+                    var markerInserted = false;
+                    
+                    // Try multiple methods to find insertion point
+                    try {
+                        // Method 1: Get the table's first cell and find its position
+                        var tableCells = tbl.cells;
+                        if (tableCells.length > 0) {
+                            var firstCell = tableCells[0];
+                            if (firstCell.texts.length > 0) {
+                                var firstText = firstCell.texts[0];
+                                if (firstText.characters.length > 0) {
+                                    var firstChar = firstText.characters[0];
+                                    var insertIndex = firstChar.index;
+                                    
+                                    // Insert marker text before the table
+                                    var markerText = "\r<<TABLE NOT EMBEDDED. PLEASE PLACE MANUALLY>>\r";
+                                    story.insertionPoints[insertIndex].contents = markerText;
+                                    markerInserted = true;
+                                    $.writeln("  Inserted marker text before table " + unplaced.index + " (method 1)");
+                                }
+                            }
+                        }
+                    } catch (e1) {
+                        // Method 1 failed, try method 2
+                        try {
+                            // Method 2: Try to get table's parent text frame and find position
+                            var parentFrame = tbl.parentTextFrames[0];
+                            if (parentFrame) {
+                                var frameStart = parentFrame.parentStory.characters[0];
+                                // Find where table starts by looking for it in the frame
+                                // This is a fallback - insert at a safe position
+                                var markerText = "\r<<TABLE " + (unplaced.index + 1) + " NOT EMBEDDED. PLEASE PLACE MANUALLY>>\r";
+                                // Insert at the end of the last placed content
+                                var lastPlacedFrame = null;
+                                for (var f = 0; f < story.textContainers.length; f++) {
+                                    try {
+                                        var tf = story.textContainers[f];
+                                        // Check if it's a text frame by trying to access overflows property
+                                        try {
+                                            var overflows = tf.overflows;
+                                            if (!overflows) {
+                                                lastPlacedFrame = tf;
+                                            }
+                                        } catch (e) {
+                                            // Not a text frame or can't access overflows
+                                        }
+                                    } catch (e) {}
+                                }
+                                
+                                if (lastPlacedFrame) {
+                                    try {
+                                        var lastChar = lastPlacedFrame.parentStory.characters[-1];
+                                        story.insertionPoints[lastChar.index + 1].contents = markerText;
+                                        markerInserted = true;
+                                        $.writeln("  Inserted marker text after last placed content for table " + unplaced.index + " (method 2)");
+                                    } catch (e) {
+                                        // Continue to method 3
+                                    }
+                                }
+                            }
+                        } catch (e2) {
+                            // Method 2 failed, use method 3
+                        }
+                    }
+                    
+                    // Method 3: Fallback - insert at end of story
+                    if (!markerInserted) {
+                        try {
+                            var markerText = "\r<<TABLE " + (unplaced.index + 1) + " NOT EMBEDDED. PLEASE PLACE MANUALLY>>\r";
+                            story.insertionPoints[-1].contents = markerText;
+                            $.writeln("  Inserted marker text at end of story for table " + unplaced.index + " (method 3)");
+                        } catch (e3) {
+                            $.writeln("  Could not insert marker text for table " + unplaced.index + " (all methods failed): " + e3);
+                        }
+                    }
+                } catch (e) {
+                    $.writeln("  Error inserting marker for table " + unplacedTables[ui].index + ": " + e);
+                }
+            }
+            
+            // Recompose after inserting markers
+            story.recompose();
+            $.writeln("Processed " + unplacedTables.length + " unplaced table(s) - markers inserted where possible");
+        }
+    }
+    
     // Warn if we hit the safety limit
     if (pageCount >= maxPages) {
         alert("⚠️ Warning: Reached safety limit of " + maxPages + " pages.\n" +
@@ -253,7 +490,8 @@ try {
         $.writeln("⚠️ Safety limit reached. Initial pages: " + initialPageCount + ", Final pages: " + doc.pages.length);
     } else if (story.overflows) {
         alert("⚠️ Warning: Text still overflows after creating " + pageCount + " pages.\n" +
-              "This may indicate a table or object that cannot flow properly.");
+              "This may indicate a table or object that cannot flow properly.\n" +
+              "Some content may not be visible.");
         $.writeln("⚠️ Overflow persists after " + pageCount + " iterations");
     }
 
