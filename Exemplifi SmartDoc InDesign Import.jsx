@@ -147,13 +147,14 @@ try {
                     var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                     var tableWidth = tbl.width;
                     // If table is wider than frame (or close to it), resize it to fit
-                    // Use 90% threshold to catch tables that are just slightly too wide
-                    if (tableWidth > frameWidth * 0.9) {
-                        var newWidth = frameWidth - 20; // Leave small margin
+                    // Use 85% threshold to catch tables that might cause issues
+                    // Be more aggressive to prevent blocking
+                    if (tableWidth > frameWidth * 0.85) {
+                        var newWidth = frameWidth - 30; // Leave larger margin for safety
                         tbl.width = newWidth;
                         $.writeln("Pre-threading: Resized table " + t + " from " + tableWidth.toFixed(2) + " to " + newWidth.toFixed(2) + " (frame: " + frameWidth.toFixed(2) + ")");
                     } else {
-                        $.writeln("Pre-threading: Table " + t + " width OK (" + tableWidth.toFixed(2) + " <= " + (frameWidth * 0.9).toFixed(2) + ")");
+                        $.writeln("Pre-threading: Table " + t + " width OK (" + tableWidth.toFixed(2) + " <= " + (frameWidth * 0.85).toFixed(2) + ")");
                     }
                 } else {
                     $.writeln("Pre-threading: Table " + t + " has no parent frame");
@@ -167,11 +168,22 @@ try {
     }
 
     // ---- Continue threading pages with safety limits ----
-    var maxPages = 100; // Safety limit to prevent infinite loops
+    var maxPages = 50; // Safety limit to prevent infinite loops (reduced from 100)
     var pageCount = 0;
     var initialPageCount = doc.pages.length;
     var lastOverflowState = story.overflows;
     var stableIterations = 0;
+    var lastVisibleCharCount = 0; // Track visible character count to detect if content is flowing
+    
+    // Get initial visible character count
+    try {
+        var lastFrame = story.textContainers[story.textContainers.length - 1];
+        if (lastFrame && !lastFrame.overflows) {
+            lastVisibleCharCount = lastFrame.parentStory.characters.length;
+        }
+    } catch (e) {
+        // Ignore if we can't get initial count
+    }
     
     $.writeln("Initial page count: " + initialPageCount);
     $.writeln("Initial overflow state: " + (story.overflows ? "OVERFLOW" : "NO OVERFLOW"));
@@ -229,14 +241,67 @@ try {
         
         pageCount++;
         
-        // Log progress every 10 pages or on first few iterations
-        if (pageCount <= 3 || pageCount % 10 === 0) {
-            $.writeln("  Iteration " + pageCount + ": Pages=" + doc.pages.length + ", Overflow=" + (story.overflows ? "YES" : "NO") + ", Containers=" + story.textContainers.length);
+        // Check if content is actually flowing by tracking the last visible character index
+        var currentLastVisibleIndex = -1;
+        var contentFlowing = false;
+        try {
+            // Find the last non-overflowing frame and get its last character index
+            for (var vc = story.textContainers.length - 1; vc >= 0; vc--) {
+                try {
+                    var vf = story.textContainers[vc];
+                    if (!vf.overflows && vf.parentStory) {
+                        // Get the last character in this frame
+                        var frameChars = vf.parentStory.characters;
+                        if (frameChars.length > 0) {
+                            try {
+                                var lastChar = frameChars[-1];
+                                currentLastVisibleIndex = lastChar.index;
+                                // Check if we've made progress
+                                contentFlowing = (currentLastVisibleIndex > lastVisibleCharCount);
+                                if (contentFlowing) {
+                                    lastVisibleCharCount = currentLastVisibleIndex;
+                                }
+                                break;
+                            } catch (e) {
+                                // Try alternative method
+                                currentLastVisibleIndex = frameChars.length - 1;
+                                contentFlowing = (currentLastVisibleIndex > lastVisibleCharCount);
+                                if (contentFlowing) {
+                                    lastVisibleCharCount = currentLastVisibleIndex;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {}
+            }
+        } catch (e) {
+            // If we can't check, assume no progress
+            contentFlowing = false;
+        }
+        
+        // Log progress every 5 pages or on first few iterations
+        if (pageCount <= 3 || pageCount % 5 === 0) {
+            $.writeln("  Iteration " + pageCount + ": Pages=" + doc.pages.length + ", Overflow=" + (story.overflows ? "YES" : "NO") + ", Containers=" + story.textContainers.length + ", ContentFlowing=" + (contentFlowing ? "YES" : "NO"));
+        }
+        
+        // Early break if we've created many pages but overflow persists
+        // This catches cases where tables are blocking and we're just creating empty pages
+        if (pageCount >= 15 && story.overflows) {
+            // If we've created 15+ pages and still have overflow, something is seriously wrong
+            $.writeln("⚠️ EARLY BREAK: Created " + pageCount + " pages but overflow persists. Likely a blocking table. Breaking to prevent excessive page creation.");
+            break;
         }
         
         // Check if overflow state changed - if it's been stable, investigate
         if (story.overflows === lastOverflowState) {
             stableIterations++;
+            
+            // If overflow hasn't changed AND content isn't flowing, we're stuck
+            if (stableIterations >= 2 && !contentFlowing) {
+                $.writeln("⚠️ STUCK DETECTED: Overflow unchanged for " + stableIterations + " iterations AND no content flowing. Breaking to prevent infinite loop.");
+                break;
+            }
             
             // If overflow hasn't changed for 2 iterations, check if it's a table blocking flow
             if (stableIterations >= 2) {
@@ -274,16 +339,20 @@ try {
                     continue; // Try again with resized table
                 }
                 
-                // If still no change after table fix attempt, continue for a few more iterations
-                // to allow content after the table to flow
-                if (stableIterations >= 5) {
-                    $.writeln("Warning: Overflow persists after " + stableIterations + " stable iterations. Continuing for content after table...");
-                    // Don't break yet - allow a few more iterations for text after table
+                // If still no change after table fix attempt, check if content is flowing
+                // If content is flowing, allow a few more iterations for text after table
+                if (stableIterations >= 3) {
+                    if (!contentFlowing) {
+                        $.writeln("⚠️ Breaking: Overflow persists for " + stableIterations + " iterations AND no content flowing. Table likely blocking.");
+                        break;
+                    } else {
+                        $.writeln("Warning: Overflow persists after " + stableIterations + " stable iterations, but content is flowing. Continuing...");
+                    }
                 }
                 
-                // Only break if we've tried many times and overflow still persists
-                if (stableIterations >= 10) {
-                    $.writeln("Breaking after " + stableIterations + " stable iterations. Content may still be in overflow.");
+                // Hard limit: break after 5 stable iterations regardless
+                if (stableIterations >= 5) {
+                    $.writeln("⚠️ Breaking after " + stableIterations + " stable iterations (hard limit). Content may still be in overflow.");
                     break;
                 }
             }
