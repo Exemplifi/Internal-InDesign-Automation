@@ -36,7 +36,12 @@ function insertCaseStudies(storyRef) {
         });
     }
 
-    if (!matches.length) return;
+    if (!matches.length) {
+        $.writeln("  No case studies found");
+        return;
+    }
+    
+    $.writeln("  Found " + matches.length + " case study tag(s)");
 
     // Process from end → start (stabilizes character indices)
     for (var i = matches.length - 1; i >= 0; i--) {
@@ -47,9 +52,11 @@ function insertCaseStudies(storyRef) {
 
         var inddFile = File(path);
         if (!inddFile.exists) {
+            $.writeln("  ERROR: Case Study INDD file not found: " + path);
             alert("Case Study INDD file not found:\n" + path);
             continue;
         }
+        $.writeln("  Processing case study: " + path);
 
         var start = block.start;
         var end = start + block.fullLen - 1;
@@ -104,8 +111,10 @@ function insertCaseStudies(storyRef) {
 try {
 
     // ---- 1) Select file ----
+    $.writeln("=== Starting InDesign Import Script ===");
     var file = File.openDialog("Select Word (.docx) or RTF file", "*.docx;*.rtf", false);
     if (!file || !file.exists) throw new Error("No file selected.");
+    $.writeln("File selected: " + file.name);
 
     // ---- 2) Place file into first frame ----
     function makeFrame(pg) {
@@ -121,16 +130,131 @@ try {
 
     var story = frame.parentStory;
     if (!story) throw new Error("No story found after placing file.");
+    $.writeln("File placed. Story length: " + story.characters.length + " characters, " + story.paragraphs.length + " paragraphs");
 
     // ---- 2b) CRITICAL — INSERT CASE STUDIES NOW (BEFORE ANY REFLOW) ----
+    $.writeln("Checking for case studies...");
     insertCaseStudies(story);
 
-    // ---- Continue threading pages ----
-    while (story.overflows) {
+    // ---- 2c) Fix table widths BEFORE threading to prevent overflow issues ----
+    $.writeln("Found " + story.tables.length + " table(s) in document");
+    if (story.tables.length) {
+        for (var t=0; t<story.tables.length; t++) {
+            try {
+                var tbl = story.tables[t];
+                var parentFrame = tbl.parentTextFrames[0];
+                if (parentFrame) {
+                    var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
+                    var tableWidth = tbl.width;
+                    // If table is wider than frame, resize it to fit
+                    if (tableWidth > frameWidth) {
+                        tbl.width = frameWidth - 20; // Leave small margin
+                        $.writeln("Pre-threading: Resized table " + t + " from " + tableWidth + " to " + tbl.width);
+                    }
+                }
+            } catch (e) {
+                $.writeln("Could not check/resize table " + t + " before threading: " + e);
+            }
+        }
+        story.recompose(); // Update overflow state after table resizing
+    }
+
+    // ---- Continue threading pages with safety limits ----
+    var maxPages = 100; // Safety limit to prevent infinite loops
+    var pageCount = 0;
+    var initialPageCount = doc.pages.length;
+    var lastOverflowState = story.overflows;
+    var stableIterations = 0;
+    
+    $.writeln("Initial page count: " + initialPageCount);
+    $.writeln("Initial overflow state: " + (story.overflows ? "OVERFLOW" : "NO OVERFLOW"));
+    
+    if (story.overflows) {
+        $.writeln("Starting page threading loop (max " + maxPages + " pages)...");
+    }
+    
+    while (story.overflows && pageCount < maxPages) {
         var last = doc.pages[-1];
         var np = doc.pages.add(LocationOptions.AFTER, last);
         var nf = makeFrame(np);
-        story.textContainers[story.textContainers.length - 1].nextTextFrame = nf;
+        
+        // Get the last text container and thread it
+        // Use try-catch to handle cases where last container isn't a TextFrame
+        try {
+            var containers = story.textContainers;
+            if (containers.length > 0) {
+                var lastContainer = containers[containers.length - 1];
+                // Try to thread the last container
+                try {
+                    lastContainer.nextTextFrame = nf;
+                    // Successfully threaded - log occasionally
+                    if (pageCount <= 3 || pageCount % 10 === 0) {
+                        $.writeln("  Iteration " + pageCount + ": Successfully threaded last container");
+                    }
+                } catch (e1) {
+                    // If last container isn't threadable (e.g., it's a table), 
+                    // search backwards for the last text frame
+                    var found = false;
+                    for (var tc = containers.length - 2; tc >= 0; tc--) {
+                        try {
+                            containers[tc].nextTextFrame = nf;
+                            found = true;
+                            break;
+                        } catch (e2) {
+                            continue;
+                        }
+                    }
+                    if (!found) {
+                        $.writeln("Warning: No threadable text frame found in iteration " + pageCount + " (containers: " + containers.length + ")");
+                    } else {
+                        $.writeln("  Iteration " + pageCount + ": Threaded from container " + (containers.length - 2 - tc) + " (last container was not threadable)");
+                    }
+                }
+            }
+        } catch (e) {
+            $.writeln("Threading error: " + e);
+            // If threading fails completely, break to prevent infinite loop
+            break;
+        }
+        
+        // Force recompose to update overflow state
+        story.recompose();
+        
+        pageCount++;
+        
+        // Log progress every 10 pages or on first few iterations
+        if (pageCount <= 3 || pageCount % 10 === 0) {
+            $.writeln("  Iteration " + pageCount + ": Pages=" + doc.pages.length + ", Overflow=" + (story.overflows ? "YES" : "NO") + ", Containers=" + story.textContainers.length);
+        }
+        
+        // Check if overflow state changed - if it's been stable for 2 iterations, break
+        if (story.overflows === lastOverflowState) {
+            stableIterations++;
+            if (stableIterations >= 2) {
+                $.writeln("Warning: Overflow state not changing after threading. Breaking to prevent infinite loop.");
+                break;
+            }
+        } else {
+            stableIterations = 0;
+            lastOverflowState = story.overflows;
+        }
+    }
+    
+    // Final recompose
+    story.recompose();
+    
+    $.writeln("Page threading complete. Iterations: " + pageCount + ", Final pages: " + doc.pages.length + ", Final overflow: " + (story.overflows ? "YES" : "NO"));
+    
+    // Warn if we hit the safety limit
+    if (pageCount >= maxPages) {
+        alert("⚠️ Warning: Reached safety limit of " + maxPages + " pages.\n" +
+              "Document may contain problematic tables or formatting.\n" +
+              "Pages created: " + (doc.pages.length - initialPageCount));
+        $.writeln("⚠️ Safety limit reached. Initial pages: " + initialPageCount + ", Final pages: " + doc.pages.length);
+    } else if (story.overflows) {
+        alert("⚠️ Warning: Text still overflows after creating " + pageCount + " pages.\n" +
+              "This may indicate a table or object that cannot flow properly.");
+        $.writeln("⚠️ Overflow persists after " + pageCount + " iterations");
     }
 
     // ---- 3) Load styles ----
@@ -207,10 +331,38 @@ try {
         }
     }
 
-    // ---- 8) Apply table style to native Word tables ----
-    if (ps.table && story.tables.length) {
+    // ---- 8) Apply table style to native Word tables and fix width issues ----
+    $.writeln("Processing " + story.tables.length + " table(s) for styling and width fixes...");
+    if (story.tables.length) {
         for (var t=0; t<story.tables.length; t++) {
-            try { story.tables[t].appliedTableStyle = ps.table; } catch(_){}
+            try {
+                var tbl = story.tables[t];
+                
+                // Apply table style if available
+                if (ps.table) {
+                    tbl.appliedTableStyle = ps.table;
+                }
+                
+                // Fix tables that are too wide for the frame
+                // This prevents tables from blocking text flow
+                try {
+                    var parentFrame = tbl.parentTextFrames[0];
+                    if (parentFrame) {
+                        var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
+                        var tableWidth = tbl.width;
+                        
+                        // If table is wider than frame, resize it to fit
+                        if (tableWidth > frameWidth) {
+                            tbl.width = frameWidth - 20; // Leave small margin
+                            $.writeln("Resized table " + t + " from " + tableWidth + " to " + tbl.width);
+                        }
+                    }
+                } catch (e) {
+                    $.writeln("Could not resize table " + t + ": " + e);
+                }
+            } catch(e) {
+                $.writeln("Error processing table " + t + ": " + e);
+            }
         }
     }
 
@@ -246,9 +398,11 @@ try {
         }
     }
 
+    $.writeln("Converting tagged table blocks...");
     convertTaggedTables(story, "Table Style");
 
     // ---- 10) Hyperlinks -------
+    $.writeln("Processing hyperlinks...");
     if (cs.link) {
         // True hyperlinks
         for (var h=0; h<doc.hyperlinks.length; h++) {
@@ -278,6 +432,8 @@ try {
     }
 
     story.recompose();
+    $.writeln("=== Import Complete ===");
+    $.writeln("Final document: " + doc.pages.length + " pages, " + story.paragraphs.length + " paragraphs");
     alert("✅ Import complete.\nHeadings, Bullets, Bold, Tables, Case Studies, and Hyperlinks applied.");
 
 } catch(err) {
