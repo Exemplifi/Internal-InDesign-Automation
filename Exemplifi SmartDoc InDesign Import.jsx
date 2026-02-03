@@ -162,11 +162,35 @@ try {
     // ---- 2c) IMMEDIATE table fix - Handle fixed-width tables right after import ----
     // Fixed-width tables from Word can cause overflow because they're set to specific widths
     // that may not fit the InDesign frame. We need to detect and resize them aggressively.
+    // CRITICAL: Also enable page breaks so tables can split across pages.
     $.writeln("Found " + story.tables.length + " table(s) in document");
     if (story.tables.length) {
         for (var t=0; t<story.tables.length; t++) {
             try {
                 var tbl = story.tables[t];
+                
+                // CRITICAL FIX: Enable page breaks for tables so they can split across pages
+                // Without this, tables that are taller than one page will cause import to fail
+                try {
+                    tbl.allowPageBreak = true;
+                    $.writeln("Table " + t + ": Enabled page breaks (allowPageBreak = true)");
+                    
+                    // Also enable page breaks for all rows (some rows might have it disabled)
+                    try {
+                        for (var r = 0; r < tbl.rows.length; r++) {
+                            try {
+                                tbl.rows[r].allowPageBreak = true;
+                            } catch (e) {
+                                // Ignore individual row errors
+                            }
+                        }
+                    } catch (e) {
+                        $.writeln("  Could not set row page breaks: " + e);
+                    }
+                } catch (e) {
+                    $.writeln("  Could not enable page breaks for table " + t + ": " + e);
+                }
+                
                 var parentFrame = tbl.parentTextFrames[0];
                 if (parentFrame) {
                     var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
@@ -754,6 +778,19 @@ try {
             try {
                 var tbl = story.tables[t];
                 
+                // Ensure page breaks are enabled (defensive - in case tables were modified)
+                try {
+                    tbl.allowPageBreak = true;
+                    // Also ensure rows can break
+                    for (var r = 0; r < tbl.rows.length; r++) {
+                        try {
+                            tbl.rows[r].allowPageBreak = true;
+                        } catch (e) {}
+                    }
+                } catch (e) {
+                    $.writeln("Could not ensure page breaks for table " + t + ": " + e);
+                }
+                
                 // Apply table style if available
                 if (ps.table) {
                     tbl.appliedTableStyle = ps.table;
@@ -811,6 +848,18 @@ try {
             var tbl = range.convertToTable("\t","\r");
             if (style && style.isValid) tbl.appliedTableStyle = style;
             try { tbl.rows[0].rowType = RowTypes.HEADER_ROW; } catch(_){}
+            
+            // Enable page breaks for tagged tables so they can split across pages
+            try {
+                tbl.allowPageBreak = true;
+                for (var r = 0; r < tbl.rows.length; r++) {
+                    try {
+                        tbl.rows[r].allowPageBreak = true;
+                    } catch (e) {}
+                }
+            } catch (e) {
+                $.writeln("Could not enable page breaks for tagged table: " + e);
+            }
         }
     }
 
