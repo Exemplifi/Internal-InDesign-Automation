@@ -116,6 +116,29 @@ try {
     if (!file || !file.exists) throw new Error("No file selected.");
     $.writeln("File selected: " + file.name);
 
+    // ---- 1b) Set import preferences to ensure tables are imported correctly ----
+    // This is critical for fixed-width tables from Word
+    try {
+        var importPrefs = app.importPreferences;
+        if (importPrefs) {
+            try {
+                importPrefs.convertTablesTo = TableFormat.INDD_TABLE;
+                $.writeln("Set import preference: convertTablesTo = INDD_TABLE");
+            } catch (e) {
+                $.writeln("Could not set table import preference: " + e);
+            }
+            try {
+                if (importPrefs.hasOwnProperty("preserveLocalOverrides")) {
+                    importPrefs.preserveLocalOverrides = false;
+                }
+            } catch (e) {
+                // Ignore if not available
+            }
+        }
+    } catch (e) {
+        $.writeln("Could not access import preferences: " + e);
+    }
+
     // ---- 2) Place file into first frame ----
     function makeFrame(pg) {
         var m = pg.marginPreferences, b = pg.bounds;
@@ -136,7 +159,9 @@ try {
     $.writeln("Checking for case studies...");
     insertCaseStudies(story);
 
-    // ---- 2c) Fix table widths BEFORE threading to prevent overflow issues ----
+    // ---- 2c) IMMEDIATE table fix - Handle fixed-width tables right after import ----
+    // Fixed-width tables from Word can cause overflow because they're set to specific widths
+    // that may not fit the InDesign frame. We need to detect and resize them aggressively.
     $.writeln("Found " + story.tables.length + " table(s) in document");
     if (story.tables.length) {
         for (var t=0; t<story.tables.length; t++) {
@@ -146,13 +171,43 @@ try {
                 if (parentFrame) {
                     var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                     var tableWidth = tbl.width;
-                    // If table is wider than frame (or close to it), resize it to fit
-                    // Use 85% threshold to catch tables that might cause issues
-                    // Be more aggressive to prevent blocking
-                    if (tableWidth > frameWidth * 0.85) {
+                    var widthDifference = Math.abs(tableWidth - frameWidth);
+                    
+                    // Detect fixed-width tables: width is very close to frame width (within 5 points)
+                    // or table is >= 95% of frame width - these are likely fixed-width from Word
+                    var isFixedWidthTable = (widthDifference < 5) || (tableWidth >= frameWidth * 0.95);
+                    
+                    if (isFixedWidthTable) {
+                        // Fixed-width table detected - resize aggressively to 90% of frame
+                        // This gives it room to flow and prevents blocking
+                        var newWidth = frameWidth * 0.90;
+                        tbl.width = newWidth;
+                        $.writeln("Pre-threading: FIXED-WIDTH table " + t + " detected (width: " + tableWidth.toFixed(2) + ", frame: " + frameWidth.toFixed(2) + ", diff: " + widthDifference.toFixed(2) + ")");
+                        $.writeln("  Resized to " + newWidth.toFixed(2) + " (90% of frame)");
+                        
+                        // Try to redistribute column widths to make it more flexible
+                        // This helps convert fixed-width layout to auto-fit
+                        try {
+                            var numCols = tbl.columns.length;
+                            if (numCols > 0) {
+                                var colWidth = newWidth / numCols;
+                                for (var col = 0; col < numCols; col++) {
+                                    try {
+                                        tbl.columns[col].width = colWidth;
+                                    } catch (e) {
+                                        // Ignore individual column errors
+                                    }
+                                }
+                                $.writeln("  Redistributed " + numCols + " columns to equal width (" + colWidth.toFixed(2) + " each)");
+                            }
+                        } catch (e) {
+                            $.writeln("  Could not redistribute columns: " + e);
+                        }
+                    } else if (tableWidth > frameWidth * 0.85) {
+                        // Regular oversized table - resize to fit with margin
                         var newWidth = frameWidth - 30; // Leave larger margin for safety
                         tbl.width = newWidth;
-                        $.writeln("Pre-threading: Resized table " + t + " from " + tableWidth.toFixed(2) + " to " + newWidth.toFixed(2) + " (frame: " + frameWidth.toFixed(2) + ")");
+                        $.writeln("Pre-threading: Resized oversized table " + t + " from " + tableWidth.toFixed(2) + " to " + newWidth.toFixed(2) + " (frame: " + frameWidth.toFixed(2) + ")");
                     } else {
                         $.writeln("Pre-threading: Table " + t + " width OK (" + tableWidth.toFixed(2) + " <= " + (frameWidth * 0.85).toFixed(2) + ")");
                     }
@@ -165,6 +220,31 @@ try {
         }
         story.recompose(); // Update overflow state after table resizing
         $.writeln("After table resizing: Overflow = " + (story.overflows ? "YES" : "NO"));
+        
+        // Second pass: if overflow persists, check for tables that still might be blocking
+        if (story.overflows) {
+            $.writeln("Overflow persists after first table resize pass. Checking for remaining blocking tables...");
+            for (var t2=0; t2<story.tables.length; t2++) {
+                try {
+                    var tbl2 = story.tables[t2];
+                    var parentFrame2 = tbl2.parentTextFrames[0];
+                    if (parentFrame2 && parentFrame2.overflows) {
+                        var frameWidth2 = parentFrame2.geometricBounds[3] - parentFrame2.geometricBounds[1];
+                        var tableWidth2 = tbl2.width;
+                        // If table is still > 85% of frame, resize more aggressively
+                        if (tableWidth2 > frameWidth2 * 0.85) {
+                            var newWidth2 = frameWidth2 * 0.85; // More aggressive resize
+                            tbl2.width = newWidth2;
+                            $.writeln("Second pass: Aggressively resized table " + t2 + " to " + newWidth2.toFixed(2) + " (85% of frame)");
+                        }
+                    }
+                } catch (e) {
+                    $.writeln("Could not check/resize table " + t2 + " in second pass: " + e);
+                }
+            }
+            story.recompose();
+            $.writeln("After second table resize pass: Overflow = " + (story.overflows ? "YES" : "NO"));
+        }
     }
 
     // ---- Continue threading pages with safety limits ----
@@ -317,9 +397,38 @@ try {
                             // Table is in an overflowing frame - try to resize it more aggressively
                             try {
                                 var frameWidth = tf.geometricBounds[3] - tf.geometricBounds[1];
-                                if (t.width > frameWidth * 0.9) {
+                                var tableWidth = t.width;
+                                var widthDifference = Math.abs(tableWidth - frameWidth);
+                                
+                                // Check if this is a fixed-width table (very close to frame width)
+                                var isFixedWidth = (widthDifference < 5) || (tableWidth >= frameWidth * 0.95);
+                                
+                                if (isFixedWidth) {
+                                    // Fixed-width table blocking flow - resize very aggressively
+                                    var newWidth = frameWidth * 0.80; // 80% of frame
+                                    t.width = newWidth;
+                                    $.writeln("  FIXED-WIDTH blocking table " + ti + " detected. Resized from " + tableWidth.toFixed(2) + " to " + newWidth.toFixed(2));
+                                    
+                                    // Try to redistribute columns
+                                    try {
+                                        var numCols = t.columns.length;
+                                        if (numCols > 0) {
+                                            var colWidth = newWidth / numCols;
+                                            for (var col = 0; col < numCols; col++) {
+                                                try {
+                                                    t.columns[col].width = colWidth;
+                                                } catch (e) {}
+                                            }
+                                            $.writeln("    Redistributed " + numCols + " columns");
+                                        }
+                                    } catch (e) {}
+                                    
+                                    story.recompose();
+                                    blockingTable = true;
+                                } else if (tableWidth > frameWidth * 0.9) {
+                                    // Regular oversized table - resize aggressively
                                     t.width = frameWidth * 0.85; // More aggressive resize
-                                    $.writeln("  Aggressively resized blocking table " + ti + " to " + t.width);
+                                    $.writeln("  Aggressively resized blocking table " + ti + " from " + tableWidth.toFixed(2) + " to " + (frameWidth * 0.85).toFixed(2));
                                     story.recompose();
                                     blockingTable = true;
                                 }
