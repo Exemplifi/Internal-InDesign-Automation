@@ -172,23 +172,63 @@ try {
                 // CRITICAL FIX: Enable page breaks for tables so they can split across pages
                 // Without this, tables that are taller than one page will cause import to fail
                 try {
-                    tbl.allowPageBreak = true;
-                    $.writeln("Table " + t + ": Enabled page breaks (allowPageBreak = true)");
+                    // Check if property exists before setting
+                    if (tbl.hasOwnProperty("allowPageBreak")) {
+                        var oldValue = tbl.allowPageBreak;
+                        tbl.allowPageBreak = true;
+                        var newValue = tbl.allowPageBreak;
+                        
+                        if (newValue === true) {
+                            $.writeln("Table " + t + ": ✓ Page breaks enabled (was: " + oldValue + ", now: " + newValue + ")");
+                        } else {
+                            $.writeln("⚠️ Table " + t + ": WARNING - allowPageBreak set to true but value is " + newValue);
+                        }
+                    } else {
+                        $.writeln("⚠️ Table " + t + ": allowPageBreak property does not exist on this table object");
+                    }
                     
                     // Also enable page breaks for all rows (some rows might have it disabled)
                     try {
-                        for (var r = 0; r < tbl.rows.length; r++) {
+                        var rowCount = tbl.rows.length;
+                        var rowsEnabled = 0;
+                        var rowsFailed = 0;
+                        
+                        for (var r = 0; r < rowCount; r++) {
                             try {
-                                tbl.rows[r].allowPageBreak = true;
+                                if (tbl.rows[r].hasOwnProperty("allowPageBreak")) {
+                                    tbl.rows[r].allowPageBreak = true;
+                                    if (tbl.rows[r].allowPageBreak === true) {
+                                        rowsEnabled++;
+                                    } else {
+                                        rowsFailed++;
+                                    }
+                                } else {
+                                    rowsFailed++;
+                                }
                             } catch (e) {
-                                // Ignore individual row errors
+                                rowsFailed++;
+                                $.writeln("  Row " + r + " error: " + e);
                             }
                         }
+                        
+                        if (rowsEnabled === rowCount) {
+                            $.writeln("  Table " + t + ": ✓ All " + rowCount + " rows have page breaks enabled");
+                        } else {
+                            $.writeln("  ⚠️ Table " + t + ": Only " + rowsEnabled + " of " + rowCount + " rows have page breaks enabled (" + rowsFailed + " failed)");
+                        }
                     } catch (e) {
-                        $.writeln("  Could not set row page breaks: " + e);
+                        $.writeln("  ⚠️ Could not set row page breaks for table " + t + ": " + e);
+                    }
+                    
+                    // Log table dimensions for debugging
+                    try {
+                        $.writeln("  Table " + t + " dimensions: " + tbl.rows.length + " rows, " + tbl.columns.length + " cols, width: " + tbl.width.toFixed(2) + "pt");
+                    } catch (e) {
+                        $.writeln("  Could not get table " + t + " dimensions: " + e);
                     }
                 } catch (e) {
-                    $.writeln("  Could not enable page breaks for table " + t + ": " + e);
+                    $.writeln("  ❌ ERROR: Could not enable page breaks for table " + t + ": " + e);
+                    $.writeln("  Error details: " + e.toString() + " (line: " + e.line + ")");
                 }
                 
                 var parentFrame = tbl.parentTextFrames[0];
@@ -684,6 +724,59 @@ try {
         }
     }
     
+    // Diagnostic: Check table page break status after threading
+    $.writeln("=== Table Page Break Diagnostic ===");
+    if (story.tables.length > 0) {
+        for (var diag = 0; diag < story.tables.length; diag++) {
+            try {
+                var diagTbl = story.tables[diag];
+                var hasPageBreak = false;
+                var pageBreakValue = "unknown";
+                
+                try {
+                    if (diagTbl.hasOwnProperty("allowPageBreak")) {
+                        pageBreakValue = diagTbl.allowPageBreak;
+                        hasPageBreak = (diagTbl.allowPageBreak === true);
+                    }
+                } catch (e) {
+                    pageBreakValue = "error: " + e;
+                }
+                
+                // Check if table spans multiple pages
+                var spansPages = false;
+                var tableFrames = [];
+                try {
+                    tableFrames = diagTbl.parentTextFrames;
+                    if (tableFrames.length > 1) {
+                        spansPages = true;
+                    } else if (tableFrames.length === 1) {
+                        // Check if table is taller than its frame
+                        try {
+                            var frameHeight = tableFrames[0].geometricBounds[2] - tableFrames[0].geometricBounds[0];
+                            var tableHeight = diagTbl.height;
+                            if (tableHeight > frameHeight * 0.9) {
+                                spansPages = true; // Likely spans pages
+                            }
+                        } catch (e) {}
+                    }
+                } catch (e) {}
+                
+                $.writeln("Table " + diag + ": allowPageBreak=" + pageBreakValue + ", spansPages=" + spansPages + ", frames=" + tableFrames.length);
+                
+                if (spansPages && !hasPageBreak) {
+                    $.writeln("  ⚠️ WARNING: Table " + diag + " spans pages but allowPageBreak is NOT enabled!");
+                } else if (spansPages && hasPageBreak) {
+                    $.writeln("  ✓ Table " + diag + " spans pages and has page breaks enabled");
+                }
+            } catch (e) {
+                $.writeln("  ❌ Error checking table " + diag + ": " + e);
+            }
+        }
+    } else {
+        $.writeln("No tables found in document");
+    }
+    $.writeln("=== End Table Diagnostic ===");
+    
     // Warn if we hit the safety limit
     if (pageCount >= maxPages) {
         alert("⚠️ Warning: Reached safety limit of " + maxPages + " pages.\n" +
@@ -780,15 +873,30 @@ try {
                 
                 // Ensure page breaks are enabled (defensive - in case tables were modified)
                 try {
-                    tbl.allowPageBreak = true;
-                    // Also ensure rows can break
-                    for (var r = 0; r < tbl.rows.length; r++) {
-                        try {
-                            tbl.rows[r].allowPageBreak = true;
-                        } catch (e) {}
+                    if (tbl.hasOwnProperty("allowPageBreak")) {
+                        var currentValue = tbl.allowPageBreak;
+                        tbl.allowPageBreak = true;
+                        if (tbl.allowPageBreak !== true) {
+                            $.writeln("⚠️ Table " + t + " (styling pass): Page break setting failed (value: " + tbl.allowPageBreak + ")");
+                        }
+                        // Also ensure rows can break
+                        var rowBreakCount = 0;
+                        for (var r = 0; r < tbl.rows.length; r++) {
+                            try {
+                                if (tbl.rows[r].hasOwnProperty("allowPageBreak")) {
+                                    tbl.rows[r].allowPageBreak = true;
+                                    if (tbl.rows[r].allowPageBreak === true) rowBreakCount++;
+                                }
+                            } catch (e) {}
+                        }
+                        if (rowBreakCount < tbl.rows.length) {
+                            $.writeln("⚠️ Table " + t + " (styling pass): Only " + rowBreakCount + " of " + tbl.rows.length + " rows have page breaks");
+                        }
+                    } else {
+                        $.writeln("⚠️ Table " + t + " (styling pass): allowPageBreak property missing");
                     }
                 } catch (e) {
-                    $.writeln("Could not ensure page breaks for table " + t + ": " + e);
+                    $.writeln("❌ ERROR: Could not ensure page breaks for table " + t + " (styling pass): " + e);
                 }
                 
                 // Apply table style if available
@@ -851,14 +959,36 @@ try {
             
             // Enable page breaks for tagged tables so they can split across pages
             try {
-                tbl.allowPageBreak = true;
-                for (var r = 0; r < tbl.rows.length; r++) {
-                    try {
-                        tbl.rows[r].allowPageBreak = true;
-                    } catch (e) {}
+                if (tbl.hasOwnProperty("allowPageBreak")) {
+                    tbl.allowPageBreak = true;
+                    var tagTableBreakSet = (tbl.allowPageBreak === true);
+                    if (!tagTableBreakSet) {
+                        $.writeln("⚠️ Tagged table: Page break setting failed (value: " + tbl.allowPageBreak + ")");
+                    }
+                    
+                    var tagRowBreakCount = 0;
+                    for (var r = 0; r < tbl.rows.length; r++) {
+                        try {
+                            if (tbl.rows[r].hasOwnProperty("allowPageBreak")) {
+                                tbl.rows[r].allowPageBreak = true;
+                                if (tbl.rows[r].allowPageBreak === true) tagRowBreakCount++;
+                            }
+                        } catch (e) {
+                            $.writeln("  Tagged table row " + r + " error: " + e);
+                        }
+                    }
+                    
+                    if (tagTableBreakSet && tagRowBreakCount === tbl.rows.length) {
+                        $.writeln("✓ Tagged table: Page breaks enabled for table and all " + tbl.rows.length + " rows");
+                    } else {
+                        $.writeln("⚠️ Tagged table: Page breaks - table: " + tagTableBreakSet + ", rows: " + tagRowBreakCount + "/" + tbl.rows.length);
+                    }
+                } else {
+                    $.writeln("⚠️ Tagged table: allowPageBreak property missing");
                 }
             } catch (e) {
-                $.writeln("Could not enable page breaks for tagged table: " + e);
+                $.writeln("❌ ERROR: Could not enable page breaks for tagged table: " + e);
+                $.writeln("  Error details: " + e.toString());
             }
         }
     }
