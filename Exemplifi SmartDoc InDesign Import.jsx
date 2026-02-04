@@ -371,24 +371,45 @@ try {
                     alert("⚠️ WARNING\n\nCould not find table's parent frame!\nThis may cause import issues.");
                 }
                     
-                    // Check page break status
+                    // Check page break status - try multiple methods
+                    var pageBreakStatus = "unknown";
+                    var pageBreaksEnabled = false;
                     try {
-                        var pageBreakStatus = tbl.allowPageBreak ? "enabled" : "disabled";
+                        // Method 1: Try allowPageBreak property
+                        if (tbl.hasOwnProperty("allowPageBreak")) {
+                            pageBreaksEnabled = tbl.allowPageBreak;
+                            pageBreakStatus = pageBreaksEnabled ? "enabled" : "disabled";
+                        } else {
+                            // Method 2: Try via table style
+                            try {
+                                var tableStyle = tbl.appliedTableStyle;
+                                if (tableStyle && tableStyle.hasOwnProperty("allowPageBreak")) {
+                                    pageBreaksEnabled = tableStyle.allowPageBreak;
+                                    pageBreakStatus = pageBreaksEnabled ? "enabled (via style)" : "disabled (via style)";
+                                } else {
+                                    pageBreakStatus = "property not available";
+                                }
+                            } catch (e) {
+                                pageBreakStatus = "cannot check (property doesn't exist)";
+                            }
+                        }
                         $.writeln("Page breaks: " + pageBreakStatus);
                         
-                        // Alert if page breaks are disabled and table is tall
-                        if (!tbl.allowPageBreak && parentFrame) {
+                        // Alert if we can't enable page breaks and table is tall
+                        if (!pageBreaksEnabled && parentFrame) {
                             var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
                             if (tbl.height > frameH * 0.8) {
-                                alert("⚠️ WARNING: Page breaks DISABLED on tall table!\n\n" +
+                                alert("⚠️ WARNING: Cannot enable page breaks on tall table!\n\n" +
                                       "Table height: " + tbl.height.toFixed(2) + "pt\n" +
                                       "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                                      "This will prevent the table from flowing.\n" +
-                                      "Attempting to enable page breaks...");
+                                      "Status: " + pageBreakStatus + "\n\n" +
+                                      "This table cannot fit in one frame.\n" +
+                                      "Will attempt alternative solutions...");
                             }
                         }
                     } catch (e) {
                         $.writeln("Could not check page breaks: " + e);
+                        pageBreakStatus = "error: " + e;
                     }
                 } catch (e) {
                     $.writeln("Error in table diagnostic: " + e);
@@ -397,21 +418,90 @@ try {
                 
                 // CRITICAL FIX: Enable page breaks for tables so they can split across pages
                 // Without this, tables that are taller than one page will cause import to fail
+                var pageBreaksSet = false;
                 try {
-                    // Check if property exists before setting
+                    // Method 1: Try allowPageBreak property directly
                     if (tbl.hasOwnProperty("allowPageBreak")) {
-                        var oldValue = tbl.allowPageBreak;
-                        tbl.allowPageBreak = true;
-                        var newValue = tbl.allowPageBreak;
-                        
-                        if (newValue === true) {
-                            $.writeln("Table " + t + ": ✓ Page breaks enabled (was: " + oldValue + ", now: " + newValue + ")");
-                        } else {
-                            $.writeln("⚠️ Table " + t + ": WARNING - allowPageBreak set to true but value is " + newValue);
+                        try {
+                            var oldValue = tbl.allowPageBreak;
+                            tbl.allowPageBreak = true;
+                            var newValue = tbl.allowPageBreak;
+                            
+                            if (newValue === true) {
+                                $.writeln("Table " + t + ": ✓ Page breaks enabled (was: " + oldValue + ", now: " + newValue + ")");
+                                pageBreaksSet = true;
+                            } else {
+                                $.writeln("⚠️ Table " + t + ": WARNING - allowPageBreak set to true but value is " + newValue);
+                            }
+                        } catch (e) {
+                            $.writeln("Error setting allowPageBreak: " + e);
                         }
                     } else {
-                        $.writeln("⚠️ Table " + t + ": allowPageBreak property does not exist on this table object");
+                        $.writeln("⚠️ Table " + t + ": allowPageBreak property does not exist on table object");
+                        
+                        // Method 2: Try setting on rows instead
+                        $.writeln("Attempting to enable page breaks via rows...");
+                        try {
+                            var rowsWithPageBreaks = 0;
+                            for (var r = 0; r < tbl.rows.length; r++) {
+                                try {
+                                    if (tbl.rows[r].hasOwnProperty("allowPageBreak")) {
+                                        tbl.rows[r].allowPageBreak = true;
+                                        if (tbl.rows[r].allowPageBreak === true) {
+                                            rowsWithPageBreaks++;
+                                        }
+                                    }
+                                } catch (e) {}
+                            }
+                            if (rowsWithPageBreaks > 0) {
+                                $.writeln("  ✓ Enabled page breaks on " + rowsWithPageBreaks + " of " + tbl.rows.length + " rows");
+                                pageBreaksSet = true;
+                            } else {
+                                $.writeln("  ⚠️ Could not enable page breaks on rows either");
+                            }
+                        } catch (e) {
+                            $.writeln("  Error enabling page breaks on rows: " + e);
+                        }
+                        
+                        // Method 3: Try via table style
+                        try {
+                            var tableStyle = tbl.appliedTableStyle;
+                            if (tableStyle && tableStyle.hasOwnProperty("allowPageBreak")) {
+                                tableStyle.allowPageBreak = true;
+                                $.writeln("  ✓ Set page breaks via table style");
+                                pageBreaksSet = true;
+                            }
+                        } catch (e) {
+                            $.writeln("  Could not set via table style: " + e);
+                        }
                     }
+                    
+                    if (!pageBreaksSet && parentFrame) {
+                        var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
+                        if (tbl.height > frameH) {
+                            // Table is taller than frame and we can't enable page breaks
+                            // Try alternative: Force recompose and check if InDesign handles it automatically
+                            alert("⚠️ CRITICAL: Cannot enable page breaks on table!\n\n" +
+                                  "Table: " + tbl.height.toFixed(2) + "pt tall\n" +
+                                  "Frame: " + frameH.toFixed(2) + "pt tall\n" +
+                                  "Table is " + ((tbl.height / frameH) * 100).toFixed(1) + "% of frame height\n\n" +
+                                  "Page breaks property doesn't exist on this table.\n" +
+                                  "InDesign may handle this automatically, or the table\n" +
+                                  "may need to be manually adjusted.\n\n" +
+                                  "Attempting to force recompose...");
+                            
+                            // Force recompose - sometimes InDesign handles tall tables automatically
+                            try {
+                                story.recompose();
+                                $.writeln("Forced recompose after page break attempt");
+                            } catch (e) {
+                                $.writeln("Error forcing recompose: " + e);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    $.writeln("Error in page break setup: " + e);
+                }
                     
                     // Also enable page breaks for all rows (some rows might have it disabled)
                     try {
