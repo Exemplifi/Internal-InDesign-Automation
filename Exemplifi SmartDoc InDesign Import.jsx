@@ -687,15 +687,34 @@ try {
                                         
                                         var pbStatus = "unknown";
                                         var pbEnabled = false;
+                                        var pbError = null;
                                         try {
-                                            pbEnabled = otbl.allowPageBreak;
-                                            pbStatus = pbEnabled ? "ENABLED" : "DISABLED";
+                                            if (otbl.hasOwnProperty("allowPageBreak")) {
+                                                pbEnabled = otbl.allowPageBreak;
+                                                pbStatus = pbEnabled ? "ENABLED" : "DISABLED";
+                                            } else {
+                                                pbStatus = "PROPERTY NOT AVAILABLE";
+                                                pbError = "allowPageBreak property doesn't exist on table object";
+                                            }
                                             $.writeln("  Page breaks: " + pbStatus);
                                             
-                                            if (!pbEnabled) {
+                                            if (pbError) {
+                                                // Property doesn't exist - this is the root cause
+                                                alert("🚨 ROOT CAUSE IDENTIFIED!\n\n" +
+                                                      "Table is " + heightPct + "% taller than frame!\n\n" +
+                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
+                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n" +
+                                                      "Difference: " + (otbl.height - oframeH).toFixed(2) + "pt\n\n" +
+                                                      "❌ Page breaks property NOT AVAILABLE!\n" +
+                                                      "Error: " + pbError + "\n\n" +
+                                                      "This table cannot fit in one frame and\n" +
+                                                      "page breaks cannot be enabled programmatically.\n\n" +
+                                                      "The table may need manual adjustment or\n" +
+                                                      "InDesign may handle it during threading.");
+                                            } else if (!pbEnabled) {
                                                 $.writeln("  ❌ THIS IS THE PROBLEM: Page breaks are disabled!");
                                                 alert("🚨 ROOT CAUSE FOUND!\n\n" +
-                                                      "Table is " + heightPct + "% taller than frame.\n" +
+                                                      "Table is " + heightPct + "% taller than frame.\n\n" +
                                                       "Table height: " + otbl.height.toFixed(2) + "pt\n" +
                                                       "Frame height: " + oframeH.toFixed(2) + "pt\n\n" +
                                                       "Page breaks are DISABLED!\n\n" +
@@ -724,15 +743,22 @@ try {
                                                     alert("❌ FAILED to enable page breaks!\n\nError: " + e);
                                                 }
                                             } else {
-                                                alert("⚠️ Table is " + heightPct + "% taller than frame.\n" +
+                                                alert("⚠️ Table is " + heightPct + "% taller than frame.\n\n" +
+                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
+                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n\n" +
                                                       "Page breaks are enabled, but table still not flowing.\n" +
                                                       "This may be a different issue.\n\n" +
-                                                      "Table: " + otbl.height.toFixed(2) + "pt\n" +
-                                                      "Frame: " + oframeH.toFixed(2) + "pt");
+                                                      "Possible causes:\n" +
+                                                      "- Table width too wide\n" +
+                                                      "- Table has fixed layout\n" +
+                                                      "- Other formatting preventing flow");
                                             }
                                         } catch (e) {
                                             $.writeln("  Could not check page breaks: " + e);
-                                            alert("⚠️ Could not check page breaks: " + e);
+                                            alert("⚠️ ERROR checking page breaks!\n\n" +
+                                                  "Table: " + otbl.height.toFixed(2) + "pt tall\n" +
+                                                  "Frame: " + oframeH.toFixed(2) + "pt tall\n\n" +
+                                                  "Error: " + e);
                                         }
                                     }
                                 }
