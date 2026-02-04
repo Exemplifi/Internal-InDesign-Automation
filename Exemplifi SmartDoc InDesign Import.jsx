@@ -667,14 +667,7 @@ try {
                         if (tbl.height > frameH) {
                             // Table is taller than frame and we can't enable page breaks
                             // Try alternative: Force recompose and check if InDesign handles it automatically
-                            alert("⚠️ CRITICAL: Cannot enable page breaks on table!\n\n" +
-                                  "Table: " + tbl.height.toFixed(2) + "pt tall\n" +
-                                  "Frame: " + frameH.toFixed(2) + "pt tall\n" +
-                                  "Table is " + ((tbl.height / frameH) * 100).toFixed(1) + "% of frame height\n\n" +
-                                  "Page breaks property doesn't exist on this table.\n" +
-                                  "InDesign may handle this automatically, or the table\n" +
-                                  "may need to be manually adjusted.\n\n" +
-                                  "Attempting to force recompose...");
+                            $.writeln("⚠️ Cannot enable page breaks on table - attempting recompose");
                             
                             // Force recompose - sometimes InDesign handles tall tables automatically
                             try {
