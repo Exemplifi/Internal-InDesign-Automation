@@ -209,6 +209,32 @@ try {
     var story = frame.parentStory;
     if (!story) throw new Error("No story found after placing file.");
     $.writeln("File placed. Story length: " + story.characters.length + " characters, " + story.paragraphs.length + " paragraphs");
+    
+    // DEEP DIAGNOSTIC: Understand the actual import state
+    $.writeln("=== DEEP DIAGNOSTIC: Post-Import State ===");
+    $.writeln("Initial overflow: " + (story.overflows ? "YES" : "NO"));
+    $.writeln("Text containers: " + story.textContainers.length);
+    $.writeln("Tables found: " + story.tables.length);
+    
+    // Check what's actually in the story
+    try {
+        var firstChars = story.characters.length > 0 ? story.characters.item(0).contents.substring(0, 50) : "empty";
+        var lastChars = story.characters.length > 0 ? story.characters.item(-1).contents.substring(0, 50) : "empty";
+        $.writeln("First 50 chars: " + firstChars);
+        $.writeln("Last 50 chars: " + lastChars);
+    } catch (e) {
+        $.writeln("Could not get character samples: " + e);
+    }
+    
+    // Check frame state
+    try {
+        $.writeln("Initial frame overflow: " + (frame.overflows ? "YES" : "NO"));
+        var frameBounds = frame.geometricBounds;
+        $.writeln("Frame size: " + (frameBounds[3] - frameBounds[1]).toFixed(2) + "pt × " + (frameBounds[2] - frameBounds[0]).toFixed(2) + "pt");
+    } catch (e) {
+        $.writeln("Could not get frame info: " + e);
+    }
+    $.writeln("=== End Deep Diagnostic ===");
 
     // ---- 2b) CRITICAL — INSERT CASE STUDIES NOW (BEFORE ANY REFLOW) ----
     $.writeln("Checking for case studies...");
@@ -240,6 +266,70 @@ try {
         for (var t=0; t<story.tables.length; t++) {
             try {
                 var tbl = story.tables[t];
+                
+                // DEEP DIAGNOSTIC: Understand this specific table BEFORE processing
+                $.writeln("=== DEEP DIAGNOSTIC: Table " + t + " (BEFORE PROCESSING) ===");
+                try {
+                    $.writeln("Table rows: " + tbl.rows.length + ", cols: " + tbl.columns.length);
+                    $.writeln("Table width: " + tbl.width.toFixed(2) + "pt, height: " + tbl.height.toFixed(2) + "pt");
+                    
+                    // Check table's position in story - find where it starts
+                    try {
+                        var firstCell = tbl.cells[0];
+                        if (firstCell) {
+                            var cellText = firstCell.texts[0];
+                            if (cellText && cellText.parentStory) {
+                                var charIndex = cellText.characters[0].index;
+                                $.writeln("Table starts at character index: " + charIndex + " (out of " + story.characters.length + " total)");
+                                
+                                // Check what's before and after the table
+                                if (charIndex > 0) {
+                                    var beforeText = story.characters.itemByRange(0, Math.min(charIndex - 1, 100)).contents;
+                                    $.writeln("Text before table (first 100 chars): " + beforeText.substring(0, 100));
+                                }
+                                if (charIndex < story.characters.length - 1) {
+                                    var afterStart = charIndex + 100;
+                                    var afterEnd = Math.min(afterStart + 100, story.characters.length - 1);
+                                    if (afterStart < story.characters.length) {
+                                        var afterText = story.characters.itemByRange(afterStart, afterEnd).contents;
+                                        $.writeln("Text after table (100 chars): " + afterText.substring(0, 100));
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        $.writeln("Could not get table position in story: " + e);
+                    }
+                    
+                    // Check parent frame
+                    var parentFrame = getTableParentFrame(tbl);
+                    if (parentFrame) {
+                        $.writeln("Table parent frame: " + (parentFrame.overflows ? "OVERFLOWS" : "OK"));
+                        var frameW = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
+                        var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
+                        $.writeln("Parent frame size: " + frameW.toFixed(2) + "pt × " + frameH.toFixed(2) + "pt");
+                        $.writeln("Table vs frame: " + ((tbl.width / frameW) * 100).toFixed(1) + "% width, " + ((tbl.height / frameH) * 100).toFixed(1) + "% height");
+                        
+                        // Check if table is taller than frame
+                        if (tbl.height > frameH) {
+                            $.writeln("⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)");
+                            $.writeln("   This table CANNOT fit in one frame - page breaks MUST work!");
+                        }
+                    } else {
+                        $.writeln("⚠️ WARNING: Could not find table's parent frame!");
+                    }
+                    
+                    // Check page break status
+                    try {
+                        var pageBreakStatus = tbl.allowPageBreak ? "enabled" : "disabled";
+                        $.writeln("Page breaks: " + pageBreakStatus);
+                    } catch (e) {
+                        $.writeln("Could not check page breaks: " + e);
+                    }
+                } catch (e) {
+                    $.writeln("Error in table diagnostic: " + e);
+                }
+                $.writeln("=== End Table " + t + " Diagnostic ===");
                 
                 // CRITICAL FIX: Enable page breaks for tables so they can split across pages
                 // Without this, tables that are taller than one page will cause import to fail
@@ -360,6 +450,78 @@ try {
         story.recompose(); // Update overflow state after table resizing
         var overflowAfterTables = story.overflows;
         $.writeln("After table resizing: Overflow = " + (overflowAfterTables ? "YES" : "NO"));
+        
+        // DEEP DIAGNOSTIC: What's in the overflow?
+        if (overflowAfterTables) {
+            $.writeln("=== DEEP DIAGNOSTIC: Overflow Analysis ===");
+            try {
+                // Find the overflowing frame
+                var overflowingFrame = null;
+                for (var of = 0; of < story.textContainers.length; of++) {
+                    try {
+                        var container = story.textContainers[of];
+                        if (container.overflows) {
+                            overflowingFrame = container;
+                            $.writeln("Found overflowing frame at container index: " + of);
+                            break;
+                        }
+                    } catch (e) {}
+                }
+                
+                if (overflowingFrame) {
+                    try {
+                        // Get the last visible character in this frame
+                        var frameStory = overflowingFrame.parentStory;
+                        var frameChars = frameStory.characters;
+                        
+                        // Try to find where the overflow starts
+                        // This is tricky - we need to find the last character that fits
+                        $.writeln("Total characters in story: " + frameChars.length);
+                        $.writeln("Overflowing frame bounds: " + overflowingFrame.geometricBounds);
+                        
+                        // Check if table is in the overflowing frame
+                        for (var ot = 0; ot < story.tables.length; ot++) {
+                            try {
+                                var otbl = story.tables[ot];
+                                var otblFrame = getTableParentFrame(otbl);
+                                if (otblFrame === overflowingFrame) {
+                                    $.writeln("⚠️ Table " + ot + " is in the overflowing frame!");
+                                    
+                                    // Check table dimensions vs frame
+                                    var oframeW = otblFrame.geometricBounds[3] - otblFrame.geometricBounds[1];
+                                    var oframeH = otblFrame.geometricBounds[2] - otblFrame.geometricBounds[0];
+                                    $.writeln("  Table: " + otbl.width.toFixed(2) + "pt × " + otbl.height.toFixed(2) + "pt");
+                                    $.writeln("  Frame: " + oframeW.toFixed(2) + "pt × " + oframeH.toFixed(2) + "pt");
+                                    
+                                    if (otbl.height > oframeH) {
+                                        $.writeln("  ⚠️ CRITICAL: Table is " + ((otbl.height / oframeH) * 100).toFixed(1) + "% of frame height");
+                                        $.writeln("  ⚠️ Table MUST split across pages - checking page breaks...");
+                                        try {
+                                            var pbStatus = otbl.allowPageBreak ? "ENABLED" : "DISABLED";
+                                            $.writeln("  Page breaks: " + pbStatus);
+                                            if (!otbl.allowPageBreak) {
+                                                $.writeln("  ❌ THIS IS THE PROBLEM: Page breaks are disabled!");
+                                            }
+                                        } catch (e) {
+                                            $.writeln("  Could not check page breaks: " + e);
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                $.writeln("Error checking table " + ot + " in overflow: " + e);
+                            }
+                        }
+                    } catch (e) {
+                        $.writeln("Error analyzing overflow: " + e);
+                    }
+                } else {
+                    $.writeln("⚠️ Could not find overflowing frame!");
+                }
+            } catch (e) {
+                $.writeln("Error in overflow diagnostic: " + e);
+            }
+            $.writeln("=== End Overflow Analysis ===");
+        }
         
         // Alert if overflow persists after table processing
         if (overflowAfterTables) {
