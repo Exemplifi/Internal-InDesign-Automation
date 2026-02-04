@@ -355,8 +355,10 @@ try {
         try {
             $.writeln("  Removing table " + tableIndex + " and inserting marker...");
             
-            // Find insertion point - get the first character of the table's first cell
+            // Find insertion point BEFORE removing table - get the first character of the table's first cell
             var insertIndex = -1;
+            var markerText = "\r<<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>\r";
+            
             try {
                 var firstCell = table.cells[0];
                 if (firstCell && firstCell.texts.length > 0) {
@@ -369,45 +371,60 @@ try {
                 $.writeln("    Could not get table insertion point: " + e);
             }
             
+            // Insert marker text BEFORE removing table (so index is still valid)
+            if (insertIndex >= 0) {
+                try {
+                    story.insertionPoints[insertIndex].contents = markerText;
+                    $.writeln("    Marker text inserted at index " + insertIndex);
+                } catch (e) {
+                    $.writeln("    Error inserting marker text at index: " + e);
+                    insertIndex = -1; // Will use fallback
+                }
+            }
+            
             // Delete the table
             try {
                 table.remove();
                 $.writeln("    Table removed successfully");
             } catch (e) {
                 $.writeln("    Error removing table: " + e);
+                // If marker was inserted but table removal failed, that's okay - marker is there
+                if (insertIndex >= 0) return true;
                 return false;
             }
             
-            // Insert marker text
-            if (insertIndex >= 0) {
+            // If marker wasn't inserted before removal, try fallback methods
+            if (insertIndex < 0) {
+                // Try to find where table was by looking for text before/after
                 try {
-                    var markerText = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
-                    story.insertionPoints[insertIndex].contents = markerText;
-                    $.writeln("    Marker text inserted at index " + insertIndex);
-                    return true;
-                } catch (e) {
-                    $.writeln("    Error inserting marker text: " + e);
-                    // Try inserting at end of story as fallback
-                    try {
-                        story.insertionPoints[-1].contents = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
-                        $.writeln("    Marker text inserted at end of story (fallback)");
-                        return true;
-                    } catch (e2) {
-                        $.writeln("    Could not insert marker text: " + e2);
-                        return false;
+                    // Find the last non-overflowing frame and insert there
+                    for (var f = story.textContainers.length - 1; f >= 0; f--) {
+                        try {
+                            var container = story.textContainers[f];
+                            if (!container.overflows && container.parentStory) {
+                                var lastChar = container.parentStory.characters[-1];
+                                story.insertionPoints[lastChar.index + 1].contents = markerText;
+                                $.writeln("    Marker text inserted after last placed content (fallback)");
+                                return true;
+                            }
+                        } catch (e) {}
                     }
+                } catch (e) {
+                    $.writeln("    Fallback insertion failed: " + e);
                 }
-            } else {
-                // Fallback: insert at end
+                
+                // Last resort: insert at end of story
                 try {
-                    story.insertionPoints[-1].contents = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
-                    $.writeln("    Marker text inserted at end of story (fallback - no index)");
+                    story.insertionPoints[-1].contents = markerText;
+                    $.writeln("    Marker text inserted at end of story (last resort)");
                     return true;
                 } catch (e) {
                     $.writeln("    Could not insert marker text: " + e);
                     return false;
                 }
             }
+            
+            return true;
         } catch (e) {
             $.writeln("  Error in removeTableAndInsertMarker: " + e);
             return false;
@@ -421,9 +438,6 @@ try {
     $.writeln("Found " + tableCount + " table(s) in document");
     
     if (tableCount > 0) {
-        alert("📊 Found " + tableCount + " table(s) in document.\n" +
-              "Checking for tables that cross pages...");
-        
         // Check each table
         for (var ts = 0; ts < story.tables.length; ts++) {
             try {
@@ -443,9 +457,7 @@ try {
         
         // Remove tables that cross pages (process in reverse to maintain indices)
         if (tablesToSkip.length > 0) {
-            alert("⚠️ Found " + tablesToSkip.length + " table(s) that cross pages.\n" +
-                  "These will be skipped and replaced with markers.\n" +
-                  "Other tables will be imported normally.");
+            $.writeln("Found " + tablesToSkip.length + " table(s) that cross pages - skipping them");
             
             for (var skipIdx = tablesToSkip.length - 1; skipIdx >= 0; skipIdx--) {
                 var skipTable = tablesToSkip[skipIdx];
@@ -459,15 +471,6 @@ try {
             // Recompose after removing tables
             story.recompose();
             $.writeln("Skipped " + tablesToSkip.length + " table(s) that cross pages");
-        }
-    } else {
-        // Check if there might be table-like content that wasn't converted
-        var storyText = story.contents;
-        var hasTabSeparatedContent = storyText.indexOf("\t") !== -1;
-        if (hasTabSeparatedContent) {
-            alert("⚠️ No tables detected, but document contains tab characters.\n" +
-                  "This may indicate a table that wasn't converted during import.\n" +
-                  "Check import preferences.");
         }
     }
     
@@ -550,8 +553,7 @@ try {
                                             "Table is " + heightPct + "% of frame height\n\n" +
                                             "This table CANNOT fit in one frame!\n" +
                                             "Page breaks MUST be enabled for it to flow!";
-                            $.writeln("⚠️ CRITICAL: " + criticalMsg);
-                            alert(criticalMsg);
+                            $.writeln("⚠️ CRITICAL: Table is " + heightPct + "% taller than frame!");
                             tableDiagnosticMsg += "\n⚠️ CRITICAL: Table is " + heightPct + "% taller than frame!";
                         }
                         
@@ -580,25 +582,13 @@ try {
                         $.writeln("Page breaks: " + pageBreakStatus);
                         tableDiagnosticMsg += "\nPage breaks: " + pageBreakStatus;
                         
-                        // Alert if we can't enable page breaks and table is tall
+                        // Log if we can't enable page breaks and table is tall
                         if (!pageBreaksEnabled && parentFrame) {
                             var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
                             if (tbl.height > frameH * 0.8) {
-                                var warningMsg = "⚠️ WARNING: Page breaks NOT enabled on tall table!\n\n" +
-                                              "Table height: " + tbl.height.toFixed(2) + "pt\n" +
-                                              "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                                              "Table is " + ((tbl.height / frameH) * 100).toFixed(1) + "% of frame height\n" +
-                                              "Page break status: " + pageBreakStatus + "\n\n" +
-                                              "This table cannot fit in one frame.\n" +
-                                              "Will attempt to enable page breaks...";
-                                alert(warningMsg);
+                                $.writeln("⚠️ WARNING: Page breaks not enabled on tall table");
                                 tableDiagnosticMsg += "\n⚠️ WARNING: Page breaks not enabled!";
                             }
-                        }
-                        
-                        // Show comprehensive table diagnostic alert
-                        if (tableDiagnosticMsg.length > 0) {
-                            alert(tableDiagnosticMsg);
                         }
                         } catch (e) {
                             $.writeln("Could not check page breaks: " + e);
@@ -606,7 +596,6 @@ try {
                         }
                     } else {
                         $.writeln("⚠️ WARNING: Could not find table's parent frame!");
-                        alert("⚠️ WARNING\n\nCould not find table's parent frame!\nThis may cause import issues.");
                     }
                 } catch (e) {
                     $.writeln("Error in table diagnostic: " + e);
@@ -817,26 +806,9 @@ try {
                                             
                                             if (pbError) {
                                                 // Property doesn't exist - this is the root cause
-                                                alert("🚨 ROOT CAUSE IDENTIFIED!\n\n" +
-                                                      "Table is " + heightPct + "% taller than frame!\n\n" +
-                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
-                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n" +
-                                                      "Difference: " + (otbl.height - oframeH).toFixed(2) + "pt\n\n" +
-                                                      "❌ Page breaks property NOT AVAILABLE!\n" +
-                                                      "Error: " + pbError + "\n\n" +
-                                                      "This table cannot fit in one frame and\n" +
-                                                      "page breaks cannot be enabled programmatically.\n\n" +
-                                                      "The table may need manual adjustment or\n" +
-                                                      "InDesign may handle it during threading.");
+                                                $.writeln("  ❌ ROOT CAUSE: Page breaks property NOT AVAILABLE");
                                             } else if (!pbEnabled) {
                                                 $.writeln("  ❌ THIS IS THE PROBLEM: Page breaks are disabled!");
-                                                alert("🚨 ROOT CAUSE FOUND!\n\n" +
-                                                      "Table is " + heightPct + "% taller than frame.\n\n" +
-                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
-                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n\n" +
-                                                      "Page breaks are DISABLED!\n\n" +
-                                                      "This is why the table cannot flow.\n" +
-                                                      "Attempting to enable page breaks...");
                                                 
                                                 // Try to enable it NOW
                                                 try {
@@ -848,34 +820,14 @@ try {
                                                     }
                                                     story.recompose();
                                                     $.writeln("  ✓ Page breaks enabled in overflow fix");
-                                                    
-                                                    // Check if it worked
-                                                    if (otbl.allowPageBreak) {
-                                                        alert("✓ Page breaks enabled!\n\nRecomposing story...");
-                                                    } else {
-                                                        alert("❌ FAILED: Page breaks still disabled after attempt!");
-                                                    }
                                                 } catch (e) {
                                                     $.writeln("  ❌ Failed to enable page breaks: " + e);
-                                                    alert("❌ FAILED to enable page breaks!\n\nError: " + e);
                                                 }
                                             } else {
-                                                alert("⚠️ Table is " + heightPct + "% taller than frame.\n\n" +
-                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
-                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n\n" +
-                                                      "Page breaks are enabled, but table still not flowing.\n" +
-                                                      "This may be a different issue.\n\n" +
-                                                      "Possible causes:\n" +
-                                                      "- Table width too wide\n" +
-                                                      "- Table has fixed layout\n" +
-                                                      "- Other formatting preventing flow");
+                                                $.writeln("  ⚠️ Page breaks enabled but table still not flowing");
                                             }
                                         } catch (e) {
                                             $.writeln("  Could not check page breaks: " + e);
-                                            alert("⚠️ ERROR checking page breaks!\n\n" +
-                                                  "Table: " + otbl.height.toFixed(2) + "pt tall\n" +
-                                                  "Frame: " + oframeH.toFixed(2) + "pt tall\n\n" +
-                                                  "Error: " + e);
                                         }
                                     }
                                 }
@@ -934,10 +886,7 @@ try {
                 }
             } catch (e) {}
             
-            var overflowMsg = "⚠️ Overflow detected after processing " + tableCount + " table(s).\n" +
-                             "This may indicate a table that cannot flow properly.\n" +
-                             "Attempting to resolve..." + tableDetails;
-            alert(overflowMsg);
+            $.writeln("⚠️ Overflow detected after processing " + tableCount + " table(s)");
         }
         
         // Second pass: if overflow persists, check for tables that still might be blocking
@@ -1092,7 +1041,6 @@ try {
                                "Likely a blocking table or object that cannot flow.\n" +
                                "Breaking to prevent excessive page creation.";
             $.writeln("⚠️ EARLY BREAK: " + earlyBreakMsg);
-            alert(earlyBreakMsg);
             break;
         }
         
@@ -1495,9 +1443,6 @@ try {
     
     // Warn if we hit the safety limit
     if (pageCount >= maxPages) {
-        alert("⚠️ Warning: Reached safety limit of " + maxPages + " pages.\n" +
-              "Document may contain problematic tables or formatting.\n" +
-              "Pages created: " + (doc.pages.length - initialPageCount));
         $.writeln("⚠️ Safety limit reached. Initial pages: " + initialPageCount + ", Final pages: " + doc.pages.length);
     } else if (story.overflows) {
         // Enhanced diagnostic message
@@ -1524,10 +1469,6 @@ try {
             }
         } catch (e) {}
         
-        var overflowWarning = "⚠️ Warning: Text still overflows after creating " + pageCount + " pages.\n" +
-                             "This may indicate a table or object that cannot flow properly.\n" +
-                             "Some content may not be visible." + tableInfo;
-        alert(overflowWarning);
         $.writeln("⚠️ Overflow persists after " + pageCount + " iterations");
     }
 
