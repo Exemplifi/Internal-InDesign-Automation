@@ -535,53 +535,6 @@ try {
                 } catch (e) {
                     $.writeln("Error in page break setup: " + e);
                 }
-                    
-                    // Also enable page breaks for all rows (some rows might have it disabled)
-                    try {
-                        var rowCount = tbl.rows.length;
-                        var rowsEnabled = 0;
-                        var rowsFailed = 0;
-                        
-                        for (var r = 0; r < rowCount; r++) {
-                            try {
-                                if (tbl.rows[r].hasOwnProperty("allowPageBreak")) {
-                                    tbl.rows[r].allowPageBreak = true;
-                                    if (tbl.rows[r].allowPageBreak === true) {
-                                        rowsEnabled++;
-                                    } else {
-                                        rowsFailed++;
-                                    }
-                                } else {
-                                    rowsFailed++;
-                                }
-                            } catch (e) {
-                                rowsFailed++;
-                                $.writeln("  Row " + r + " error: " + e);
-                            }
-                        }
-                        
-                        if (rowsEnabled === rowCount) {
-                            $.writeln("  Table " + t + ": ✓ All " + rowCount + " rows have page breaks enabled");
-                        } else {
-                            $.writeln("  ⚠️ Table " + t + ": Only " + rowsEnabled + " of " + rowCount + " rows have page breaks enabled (" + rowsFailed + " failed)");
-                        }
-                    } catch (e) {
-                        $.writeln("  ⚠️ Could not set row page breaks for table " + t + ": " + e);
-                    }
-                    
-                    // Log table dimensions for debugging
-                    try {
-                        var tableInfo = "Table " + t + ": " + tbl.rows.length + " rows, " + tbl.columns.length + " cols, width: " + tbl.width.toFixed(2) + "pt";
-                        $.writeln("  " + tableInfo);
-                    } catch (e) {
-                        $.writeln("  Could not get table " + t + " dimensions: " + e);
-                    }
-                } catch (e) {
-                    var errorMsg = "❌ ERROR: Could not enable page breaks for table " + t + ": " + e;
-                    $.writeln("  " + errorMsg);
-                    $.writeln("  Error details: " + e.toString() + " (line: " + e.line + ")");
-                    alert("⚠️ Table Error\n\n" + errorMsg + "\n\nThis may cause import issues.");
-                }
                 
                 var parentFrame = getTableParentFrame(tbl);
                 if (parentFrame) {
