@@ -359,22 +359,18 @@ try {
                         $.writeln("Parent frame size: " + frameW.toFixed(2) + "pt × " + frameH.toFixed(2) + "pt");
                         $.writeln("Table vs frame: " + ((tbl.width / frameW) * 100).toFixed(1) + "% width, " + ((tbl.height / frameH) * 100).toFixed(1) + "% height");
                         
-                    // Check if table is taller than frame
-                    if (tbl.height > frameH) {
-                        var criticalMsg = "⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)\n" +
-                                         "This table CANNOT fit in one frame - page breaks MUST work!";
-                        $.writeln("⚠️ CRITICAL: " + criticalMsg);
-                        alert("🚨 CRITICAL TABLE ISSUE\n\n" + criticalMsg);
-                    }
-                } else {
-                    $.writeln("⚠️ WARNING: Could not find table's parent frame!");
-                    alert("⚠️ WARNING\n\nCould not find table's parent frame!\nThis may cause import issues.");
-                }
-                    
-                    // Check page break status - try multiple methods
-                    var pageBreakStatus = "unknown";
-                    var pageBreaksEnabled = false;
-                    try {
+                        // Check if table is taller than frame
+                        if (tbl.height > frameH) {
+                            var criticalMsg = "⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)\n" +
+                                             "This table CANNOT fit in one frame - page breaks MUST work!";
+                            $.writeln("⚠️ CRITICAL: " + criticalMsg);
+                            alert("🚨 CRITICAL TABLE ISSUE\n\n" + criticalMsg);
+                        }
+                        
+                        // Check page break status - try multiple methods
+                        var pageBreakStatus = "unknown";
+                        var pageBreaksEnabled = false;
+                        try {
                         // Method 1: Try allowPageBreak property
                         if (tbl.hasOwnProperty("allowPageBreak")) {
                             pageBreaksEnabled = tbl.allowPageBreak;
@@ -407,9 +403,13 @@ try {
                                       "Will attempt alternative solutions...");
                             }
                         }
-                    } catch (e) {
-                        $.writeln("Could not check page breaks: " + e);
-                        pageBreakStatus = "error: " + e;
+                        } catch (e) {
+                            $.writeln("Could not check page breaks: " + e);
+                            pageBreakStatus = "error: " + e;
+                        }
+                    } else {
+                        $.writeln("⚠️ WARNING: Could not find table's parent frame!");
+                        alert("⚠️ WARNING\n\nCould not find table's parent frame!\nThis may cause import issues.");
                     }
                 } catch (e) {
                     $.writeln("Error in table diagnostic: " + e);
