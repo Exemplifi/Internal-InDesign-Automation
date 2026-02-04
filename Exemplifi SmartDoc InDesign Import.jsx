@@ -118,14 +118,18 @@ try {
 
     // ---- 1b) Set import preferences to ensure tables are imported correctly ----
     // This is critical for fixed-width tables from Word
+    var importPrefsSet = false;
     try {
         var importPrefs = app.importPreferences;
         if (importPrefs) {
             try {
                 importPrefs.convertTablesTo = TableFormat.INDD_TABLE;
                 $.writeln("Set import preference: convertTablesTo = INDD_TABLE");
+                importPrefsSet = true;
             } catch (e) {
-                $.writeln("Could not set table import preference: " + e);
+                var errorMsg = "Could not set table import preference: " + e;
+                $.writeln(errorMsg);
+                alert("⚠️ Import Preference Error\n\n" + errorMsg + "\n\nTables may not import correctly.");
             }
             try {
                 if (importPrefs.hasOwnProperty("preserveLocalOverrides")) {
@@ -136,7 +140,13 @@ try {
             }
         }
     } catch (e) {
-        $.writeln("Could not access import preferences: " + e);
+        var errorMsg = "Could not access import preferences: " + e;
+        $.writeln(errorMsg);
+        alert("⚠️ Import Preference Error\n\n" + errorMsg);
+    }
+    
+    if (!importPrefsSet) {
+        $.writeln("⚠️ WARNING: Table import preference may not be set correctly");
     }
 
     // ---- 2) Place file into first frame ----
@@ -163,7 +173,24 @@ try {
     // Fixed-width tables from Word can cause overflow because they're set to specific widths
     // that may not fit the InDesign frame. We need to detect and resize them aggressively.
     // CRITICAL: Also enable page breaks so tables can split across pages.
-    $.writeln("Found " + story.tables.length + " table(s) in document");
+    var tableCount = story.tables.length;
+    $.writeln("Found " + tableCount + " table(s) in document");
+    
+    // Alert user about tables found (critical diagnostic)
+    if (tableCount > 0) {
+        alert("📊 Found " + tableCount + " table(s) in document.\n" +
+              "Processing tables now...");
+    } else {
+        // Check if there might be table-like content that wasn't converted
+        // This can happen if Word tables aren't properly converted during import
+        var storyText = story.contents;
+        var hasTabSeparatedContent = storyText.indexOf("\t") !== -1;
+        if (hasTabSeparatedContent) {
+            alert("⚠️ No tables detected, but document contains tab characters.\n" +
+                  "This may indicate a table that wasn't converted during import.\n" +
+                  "Check import preferences.");
+        }
+    }
     if (story.tables.length) {
         for (var t=0; t<story.tables.length; t++) {
             try {
@@ -222,13 +249,16 @@ try {
                     
                     // Log table dimensions for debugging
                     try {
-                        $.writeln("  Table " + t + " dimensions: " + tbl.rows.length + " rows, " + tbl.columns.length + " cols, width: " + tbl.width.toFixed(2) + "pt");
+                        var tableInfo = "Table " + t + ": " + tbl.rows.length + " rows, " + tbl.columns.length + " cols, width: " + tbl.width.toFixed(2) + "pt";
+                        $.writeln("  " + tableInfo);
                     } catch (e) {
                         $.writeln("  Could not get table " + t + " dimensions: " + e);
                     }
                 } catch (e) {
-                    $.writeln("  ❌ ERROR: Could not enable page breaks for table " + t + ": " + e);
+                    var errorMsg = "❌ ERROR: Could not enable page breaks for table " + t + ": " + e;
+                    $.writeln("  " + errorMsg);
                     $.writeln("  Error details: " + e.toString() + " (line: " + e.line + ")");
+                    alert("⚠️ Table Error\n\n" + errorMsg + "\n\nThis may cause import issues.");
                 }
                 
                 var parentFrame = tbl.parentTextFrames[0];
@@ -283,7 +313,16 @@ try {
             }
         }
         story.recompose(); // Update overflow state after table resizing
-        $.writeln("After table resizing: Overflow = " + (story.overflows ? "YES" : "NO"));
+        var overflowAfterTables = story.overflows;
+        $.writeln("After table resizing: Overflow = " + (overflowAfterTables ? "YES" : "NO"));
+        
+        // Alert if overflow persists after table processing
+        if (overflowAfterTables) {
+            var overflowMsg = "⚠️ Overflow detected after processing " + tableCount + " table(s).\n" +
+                             "This may indicate a table that cannot flow properly.\n" +
+                             "Attempting to resolve...";
+            alert(overflowMsg);
+        }
         
         // Second pass: if overflow persists, check for tables that still might be blocking
         if (story.overflows) {
@@ -433,7 +472,11 @@ try {
         // This catches cases where tables are blocking and we're just creating empty pages
         if (pageCount >= 15 && story.overflows) {
             // If we've created 15+ pages and still have overflow, something is seriously wrong
-            $.writeln("⚠️ EARLY BREAK: Created " + pageCount + " pages but overflow persists. Likely a blocking table. Breaking to prevent excessive page creation.");
+            var earlyBreakMsg = "⚠️ EARLY BREAK: Created " + pageCount + " pages but overflow persists.\n" +
+                               "Likely a blocking table or object that cannot flow.\n" +
+                               "Breaking to prevent excessive page creation.";
+            $.writeln("⚠️ EARLY BREAK: " + earlyBreakMsg);
+            alert(earlyBreakMsg);
             break;
         }
         
@@ -784,9 +827,34 @@ try {
               "Pages created: " + (doc.pages.length - initialPageCount));
         $.writeln("⚠️ Safety limit reached. Initial pages: " + initialPageCount + ", Final pages: " + doc.pages.length);
     } else if (story.overflows) {
-        alert("⚠️ Warning: Text still overflows after creating " + pageCount + " pages.\n" +
-              "This may indicate a table or object that cannot flow properly.\n" +
-              "Some content may not be visible.");
+        // Enhanced diagnostic message
+        var tableInfo = "";
+        try {
+            var remainingTables = story.tables.length;
+            if (remainingTables > 0) {
+                tableInfo = "\n\nTables in document: " + remainingTables;
+                // Check if any tables are in overflowing frames
+                var blockingTables = 0;
+                for (var diag = 0; diag < remainingTables; diag++) {
+                    try {
+                        var diagTbl = story.tables[diag];
+                        var diagFrame = diagTbl.parentTextFrames[0];
+                        if (diagFrame && diagFrame.overflows) {
+                            blockingTables++;
+                            tableInfo += "\n  - Table " + diag + " is in an overflowing frame";
+                        }
+                    } catch (e) {}
+                }
+                if (blockingTables > 0) {
+                    tableInfo += "\n  ⚠️ " + blockingTables + " table(s) may be blocking flow";
+                }
+            }
+        } catch (e) {}
+        
+        var overflowWarning = "⚠️ Warning: Text still overflows after creating " + pageCount + " pages.\n" +
+                             "This may indicate a table or object that cannot flow properly.\n" +
+                             "Some content may not be visible." + tableInfo;
+        alert(overflowWarning);
         $.writeln("⚠️ Overflow persists after " + pageCount + " iterations");
     }
 
