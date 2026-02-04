@@ -158,6 +158,49 @@ try {
             geometricBounds: [b[0]+m.top, b[1]+m.left, b[2]-m.bottom, b[3]-m.right]
         });
     }
+    
+    // Helper function to safely get parent text frame of a table
+    function getTableParentFrame(table) {
+        try {
+            var parent = table.parent;
+            if (!parent) return null;
+            
+            // Check if parent has TextFrame properties (geometricBounds, overflows)
+            try {
+                if (parent.geometricBounds && parent.hasOwnProperty("overflows")) {
+                    return parent;
+                }
+            } catch (e) {}
+            
+            // If parent is a Cell, get its parent
+            try {
+                if (parent.constructor && parent.constructor.name === "Cell") {
+                    var cellParent = parent.parent;
+                    if (cellParent && cellParent.geometricBounds) {
+                        return cellParent;
+                    }
+                }
+            } catch (e) {}
+            
+            // Fallback: search story's text containers
+            try {
+                var story = table.parentStory;
+                if (story) {
+                    for (var i = 0; i < story.textContainers.length; i++) {
+                        try {
+                            var container = story.textContainers[i];
+                            if (container.geometricBounds) {
+                                return container;
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        } catch (e) {
+            // Return null if we can't find it
+        }
+        return null;
+    }
 
     var page = doc.pages[0];
     var frame = page.textFrames.length ? page.textFrames[0] : makeFrame(page);
@@ -263,7 +306,7 @@ try {
                     alert("⚠️ Table Error\n\n" + errorMsg + "\n\nThis may cause import issues.");
                 }
                 
-                var parentFrame = tbl.parentTextFrames[0];
+                var parentFrame = getTableParentFrame(tbl);
                 if (parentFrame) {
                     var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                     var tableWidth = tbl.width;
@@ -326,7 +369,7 @@ try {
                 for (var diag = 0; diag < story.tables.length; diag++) {
                     try {
                         var diagTbl = story.tables[diag];
-                        var diagFrame = diagTbl.parentTextFrames[0];
+                        var diagFrame = getTableParentFrame(diagTbl);
                         if (diagFrame) {
                             var frameW = diagFrame.geometricBounds[3] - diagFrame.geometricBounds[1];
                             var frameH = diagFrame.geometricBounds[2] - diagFrame.geometricBounds[0];
@@ -369,7 +412,7 @@ try {
             for (var t2=0; t2<story.tables.length; t2++) {
                 try {
                     var tbl2 = story.tables[t2];
-                    var parentFrame2 = tbl2.parentTextFrames[0];
+                    var parentFrame2 = getTableParentFrame(tbl2);
                     if (parentFrame2 && parentFrame2.overflows) {
                         var frameWidth2 = parentFrame2.geometricBounds[3] - parentFrame2.geometricBounds[1];
                         var tableWidth2 = tbl2.width;
@@ -538,7 +581,7 @@ try {
                 try {
                     for (var ti = 0; ti < story.tables.length; ti++) {
                         var t = story.tables[ti];
-                        var tf = t.parentTextFrames[0];
+                        var tf = getTableParentFrame(t);
                         if (tf && tf.overflows) {
                             // Table is in an overflowing frame - try to resize it more aggressively
                             try {
@@ -687,7 +730,7 @@ try {
         for (var finalT = 0; finalT < story.tables.length; finalT++) {
             try {
                 var finalTbl = story.tables[finalT];
-                var finalFrame = finalTbl.parentTextFrames[0];
+                var finalFrame = getTableParentFrame(finalTbl);
                 
                 if (finalFrame && finalFrame.overflows) {
                     var finalFrameW = finalFrame.geometricBounds[3] - finalFrame.geometricBounds[1];
@@ -743,7 +786,7 @@ try {
         for (var ut = 0; ut < story.tables.length; ut++) {
             try {
                 var tbl = story.tables[ut];
-                var parentFrame = tbl.parentTextFrames[0];
+                var parentFrame = getTableParentFrame(tbl);
                 
                 // Check if table is in an overflowing frame or if we can't access it
                 var isUnplaced = false;
@@ -802,7 +845,7 @@ try {
                         // Method 1 failed, try method 2
                         try {
                             // Method 2: Try to get table's parent text frame and find position
-                            var parentFrame = tbl.parentTextFrames[0];
+                            var parentFrame = getTableParentFrame(tbl);
                             if (parentFrame) {
                                 var frameStart = parentFrame.parentStory.characters[0];
                                 // Find where table starts by looking for it in the frame
@@ -884,7 +927,8 @@ try {
                 var spansPages = false;
                 var tableFrames = [];
                 try {
-                    tableFrames = diagTbl.parentTextFrames;
+                    var tempFrame = getTableParentFrame(diagTbl);
+                    tableFrames = tempFrame ? [tempFrame] : [];
                     if (tableFrames.length > 1) {
                         spansPages = true;
                     } else if (tableFrames.length === 1) {
@@ -933,7 +977,7 @@ try {
                 for (var diag = 0; diag < remainingTables; diag++) {
                     try {
                         var diagTbl = story.tables[diag];
-                        var diagFrame = diagTbl.parentTextFrames[0];
+                        var diagFrame = getTableParentFrame(diagTbl);
                         if (diagFrame && diagFrame.overflows) {
                             blockingTables++;
                             tableInfo += "\n  - Table " + diag + " is in an overflowing frame";
@@ -1070,7 +1114,7 @@ try {
                 // Fix tables that are too wide for the frame
                 // This prevents tables from blocking text flow
                 try {
-                    var parentFrame = tbl.parentTextFrames[0];
+                    var parentFrame = getTableParentFrame(tbl);
                     if (parentFrame) {
                         var frameWidth = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                         var tableWidth = tbl.width;
