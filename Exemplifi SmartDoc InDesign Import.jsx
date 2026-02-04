@@ -318,9 +318,19 @@ try {
                 
                 // DEEP DIAGNOSTIC: Understand this specific table BEFORE processing
                 $.writeln("=== DEEP DIAGNOSTIC: Table " + t + " (BEFORE PROCESSING) ===");
+                var tableDiagnosticMsg = "";
                 try {
-                    $.writeln("Table rows: " + tbl.rows.length + ", cols: " + tbl.columns.length);
-                    $.writeln("Table width: " + tbl.width.toFixed(2) + "pt, height: " + tbl.height.toFixed(2) + "pt");
+                    var tableRows = tbl.rows.length;
+                    var tableCols = tbl.columns.length;
+                    var tableW = tbl.width.toFixed(2);
+                    var tableH = tbl.height.toFixed(2);
+                    
+                    $.writeln("Table rows: " + tableRows + ", cols: " + tableCols);
+                    $.writeln("Table width: " + tableW + "pt, height: " + tableH + "pt");
+                    
+                    tableDiagnosticMsg = "📊 Table " + t + " Analysis:\n\n" +
+                                        "Dimensions: " + tableRows + " rows × " + tableCols + " cols\n" +
+                                        "Size: " + tableW + "pt × " + tableH + "pt\n";
                     
                     // Check table's position in story - find where it starts
                     try {
@@ -356,15 +366,29 @@ try {
                         $.writeln("Table parent frame: " + (parentFrame.overflows ? "OVERFLOWS" : "OK"));
                         var frameW = parentFrame.geometricBounds[3] - parentFrame.geometricBounds[1];
                         var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
-                        $.writeln("Parent frame size: " + frameW.toFixed(2) + "pt × " + frameH.toFixed(2) + "pt");
-                        $.writeln("Table vs frame: " + ((tbl.width / frameW) * 100).toFixed(1) + "% width, " + ((tbl.height / frameH) * 100).toFixed(1) + "% height");
+                        var frameWStr = frameW.toFixed(2);
+                        var frameHStr = frameH.toFixed(2);
+                        var widthPct = ((tbl.width / frameW) * 100).toFixed(1);
+                        var heightPct = ((tbl.height / frameH) * 100).toFixed(1);
+                        
+                        $.writeln("Parent frame size: " + frameWStr + "pt × " + frameHStr + "pt");
+                        $.writeln("Table vs frame: " + widthPct + "% width, " + heightPct + "% height");
+                        
+                        tableDiagnosticMsg += "Frame size: " + frameWStr + "pt × " + frameHStr + "pt\n" +
+                                             "Table vs frame: " + widthPct + "% width, " + heightPct + "% height\n";
                         
                         // Check if table is taller than frame
                         if (tbl.height > frameH) {
-                            var criticalMsg = "⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)\n" +
-                                             "This table CANNOT fit in one frame - page breaks MUST work!";
+                            var criticalMsg = "🚨 CRITICAL: Table is TALLER than frame!\n\n" +
+                                            "Table height: " + tableH + "pt\n" +
+                                            "Frame height: " + frameHStr + "pt\n" +
+                                            "Difference: " + (tbl.height - frameH).toFixed(2) + "pt\n" +
+                                            "Table is " + heightPct + "% of frame height\n\n" +
+                                            "This table CANNOT fit in one frame!\n" +
+                                            "Page breaks MUST be enabled for it to flow!";
                             $.writeln("⚠️ CRITICAL: " + criticalMsg);
-                            alert("🚨 CRITICAL TABLE ISSUE\n\n" + criticalMsg);
+                            alert(criticalMsg);
+                            tableDiagnosticMsg += "\n⚠️ CRITICAL: Table is " + heightPct + "% taller than frame!";
                         }
                         
                         // Check page break status - try multiple methods
@@ -390,18 +414,27 @@ try {
                             }
                         }
                         $.writeln("Page breaks: " + pageBreakStatus);
+                        tableDiagnosticMsg += "\nPage breaks: " + pageBreakStatus;
                         
                         // Alert if we can't enable page breaks and table is tall
                         if (!pageBreaksEnabled && parentFrame) {
                             var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
                             if (tbl.height > frameH * 0.8) {
-                                alert("⚠️ WARNING: Cannot enable page breaks on tall table!\n\n" +
-                                      "Table height: " + tbl.height.toFixed(2) + "pt\n" +
-                                      "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                                      "Status: " + pageBreakStatus + "\n\n" +
-                                      "This table cannot fit in one frame.\n" +
-                                      "Will attempt alternative solutions...");
+                                var warningMsg = "⚠️ WARNING: Page breaks NOT enabled on tall table!\n\n" +
+                                              "Table height: " + tbl.height.toFixed(2) + "pt\n" +
+                                              "Frame height: " + frameH.toFixed(2) + "pt\n" +
+                                              "Table is " + ((tbl.height / frameH) * 100).toFixed(1) + "% of frame height\n" +
+                                              "Page break status: " + pageBreakStatus + "\n\n" +
+                                              "This table cannot fit in one frame.\n" +
+                                              "Will attempt to enable page breaks...";
+                                alert(warningMsg);
+                                tableDiagnosticMsg += "\n⚠️ WARNING: Page breaks not enabled!";
                             }
+                        }
+                        
+                        // Show comprehensive table diagnostic alert
+                        if (tableDiagnosticMsg.length > 0) {
+                            alert(tableDiagnosticMsg);
                         }
                         } catch (e) {
                             $.writeln("Could not check page breaks: " + e);
