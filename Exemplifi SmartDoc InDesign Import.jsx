@@ -120,7 +120,8 @@ try {
     // This is critical for fixed-width tables from Word
     var importPrefsSet = false;
     try {
-        var importPrefs = app.importPreferences;
+        // InDesign uses wordImportPreferences for Word files
+        var importPrefs = app.wordImportPreferences;
         if (importPrefs) {
             try {
                 importPrefs.convertTablesTo = TableFormat.INDD_TABLE;
@@ -129,7 +130,7 @@ try {
             } catch (e) {
                 var errorMsg = "Could not set table import preference: " + e;
                 $.writeln(errorMsg);
-                alert("⚠️ Import Preference Error\n\n" + errorMsg + "\n\nTables may not import correctly.");
+                // Don't alert for this - it's not critical if it fails
             }
             try {
                 if (importPrefs.hasOwnProperty("preserveLocalOverrides")) {
@@ -138,11 +139,12 @@ try {
             } catch (e) {
                 // Ignore if not available
             }
+        } else {
+            $.writeln("⚠️ wordImportPreferences not available - may not be a Word file");
         }
     } catch (e) {
-        var errorMsg = "Could not access import preferences: " + e;
-        $.writeln(errorMsg);
-        alert("⚠️ Import Preference Error\n\n" + errorMsg);
+        // Silently fail - import preferences are optional
+        $.writeln("Could not set import preferences: " + e + " (this is OK, continuing...)");
     }
     
     if (!importPrefsSet) {
@@ -318,9 +320,46 @@ try {
         
         // Alert if overflow persists after table processing
         if (overflowAfterTables) {
+            // Get detailed table info for diagnostics
+            var tableDetails = "";
+            try {
+                for (var diag = 0; diag < story.tables.length; diag++) {
+                    try {
+                        var diagTbl = story.tables[diag];
+                        var diagFrame = diagTbl.parentTextFrames[0];
+                        if (diagFrame) {
+                            var frameW = diagFrame.geometricBounds[3] - diagFrame.geometricBounds[1];
+                            var frameH = diagFrame.geometricBounds[2] - diagFrame.geometricBounds[0];
+                            var tblW = diagTbl.width;
+                            var tblH = diagTbl.height;
+                            var pageBreakStatus = "unknown";
+                            try {
+                                pageBreakStatus = diagTbl.allowPageBreak ? "enabled" : "disabled";
+                            } catch (e) {}
+                            
+                            tableDetails += "\n\nTable " + diag + ":";
+                            tableDetails += "\n  Size: " + tblW.toFixed(1) + "pt × " + tblH.toFixed(1) + "pt";
+                            tableDetails += "\n  Frame: " + frameW.toFixed(1) + "pt × " + frameH.toFixed(1) + "pt";
+                            tableDetails += "\n  Page breaks: " + pageBreakStatus;
+                            tableDetails += "\n  Overflow: " + (diagFrame.overflows ? "YES" : "NO");
+                            
+                            // If table is too wide or too tall, note it
+                            if (tblW > frameW * 0.95) {
+                                tableDetails += "\n  ⚠️ Table is " + ((tblW / frameW) * 100).toFixed(1) + "% of frame width";
+                            }
+                            if (tblH > frameH * 0.9) {
+                                tableDetails += "\n  ⚠️ Table is " + ((tblH / frameH) * 100).toFixed(1) + "% of frame height";
+                            }
+                        }
+                    } catch (e) {
+                        tableDetails += "\n\nTable " + diag + ": Error getting details - " + e;
+                    }
+                }
+            } catch (e) {}
+            
             var overflowMsg = "⚠️ Overflow detected after processing " + tableCount + " table(s).\n" +
                              "This may indicate a table that cannot flow properly.\n" +
-                             "Attempting to resolve...";
+                             "Attempting to resolve..." + tableDetails;
             alert(overflowMsg);
         }
         
@@ -639,6 +678,62 @@ try {
     
     // Final recompose after additional attempts
     story.recompose();
+    
+    // FINAL AGGRESSIVE TABLE FIX: If overflow still persists, try one last desperate attempt
+    if (story.overflows && story.tables.length > 0) {
+        $.writeln("⚠️ FINAL ATTEMPT: Overflow persists. Trying aggressive table fixes...");
+        var finalFixAttempted = false;
+        
+        for (var finalT = 0; finalT < story.tables.length; finalT++) {
+            try {
+                var finalTbl = story.tables[finalT];
+                var finalFrame = finalTbl.parentTextFrames[0];
+                
+                if (finalFrame && finalFrame.overflows) {
+                    var finalFrameW = finalFrame.geometricBounds[3] - finalFrame.geometricBounds[1];
+                    var finalTblW = finalTbl.width;
+                    
+                    // Ultra-aggressive resize: force to 75% of frame width
+                    if (finalTblW > finalFrameW * 0.75) {
+                        var ultraWidth = finalFrameW * 0.75;
+                        finalTbl.width = ultraWidth;
+                        $.writeln("  FINAL FIX: Table " + finalT + " resized to " + ultraWidth.toFixed(2) + "pt (75% of frame)");
+                        finalFixAttempted = true;
+                        
+                        // Try to redistribute columns
+                        try {
+                            var numCols = finalTbl.columns.length;
+                            if (numCols > 0) {
+                                var colWidth = ultraWidth / numCols;
+                                for (var col = 0; col < numCols; col++) {
+                                    try {
+                                        finalTbl.columns[col].width = colWidth;
+                                    } catch (e) {}
+                                }
+                            }
+                        } catch (e) {}
+                        
+                        // Force page breaks one more time
+                        try {
+                            finalTbl.allowPageBreak = true;
+                            for (var r = 0; r < finalTbl.rows.length; r++) {
+                                try {
+                                    finalTbl.rows[r].allowPageBreak = true;
+                                } catch (e) {}
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {
+                $.writeln("  Error in final table fix for table " + finalT + ": " + e);
+            }
+        }
+        
+        if (finalFixAttempted) {
+            story.recompose();
+            $.writeln("After final aggressive table fix: Overflow = " + (story.overflows ? "YES" : "NO"));
+        }
+    }
     
     // Check for tables that couldn't be placed and add marker text
     if (story.overflows && story.tables.length > 0) {
