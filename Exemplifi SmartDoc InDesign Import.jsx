@@ -162,30 +162,65 @@ try {
     // Helper function to safely get parent text frame of a table
     function getTableParentFrame(table) {
         try {
-            var parent = table.parent;
-            if (!parent) return null;
-            
-            // Check if parent has TextFrame properties (geometricBounds, overflows)
+            // Method 1: Try to get parent directly
             try {
-                if (parent.geometricBounds && parent.hasOwnProperty("overflows")) {
-                    return parent;
+                var parent = table.parent;
+                if (parent) {
+                    // Check if parent is a TextFrame (has geometricBounds and overflows)
+                    try {
+                        if (parent.geometricBounds && typeof parent.overflows !== 'undefined') {
+                            return parent;
+                        }
+                    } catch (e) {}
+                    
+                    // If parent is a Cell, traverse up
+                    try {
+                        if (parent.constructor && parent.constructor.name === "Cell") {
+                            var cellParent = parent.parent;
+                            if (cellParent) {
+                                // Cell's parent might be a Table or TextFrame
+                                try {
+                                    if (cellParent.geometricBounds && typeof cellParent.overflows !== 'undefined') {
+                                        return cellParent;
+                                    }
+                                } catch (e) {}
+                                // If cell's parent is another table, go up one more level
+                                if (cellParent.constructor && cellParent.constructor.name === "Table") {
+                                    var tableParent = cellParent.parent;
+                                    if (tableParent && tableParent.geometricBounds) {
+                                        return tableParent;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {}
                 }
-            } catch (e) {}
+            } catch (e) {
+                $.writeln("Error getting table.parent: " + e);
+            }
             
-            // If parent is a Cell, get its parent
+            // Method 2: Get table's first cell and find its text frame
             try {
-                if (parent.constructor && parent.constructor.name === "Cell") {
-                    var cellParent = parent.parent;
-                    if (cellParent && cellParent.geometricBounds) {
-                        return cellParent;
+                var firstCell = table.cells[0];
+                if (firstCell) {
+                    var cellTexts = firstCell.texts;
+                    if (cellTexts.length > 0) {
+                        var cellText = cellTexts[0];
+                        if (cellText && cellText.parentTextFrames && cellText.parentTextFrames.length > 0) {
+                            return cellText.parentTextFrames[0];
+                        }
                     }
                 }
-            } catch (e) {}
+            } catch (e) {
+                $.writeln("Error getting cell text frame: " + e);
+            }
             
-            // Fallback: search story's text containers
+            // Method 3: Use story's text containers (find the one that contains this table)
             try {
                 var story = table.parentStory;
-                if (story) {
+                if (story && story.textContainers.length > 0) {
+                    // Return the first text container (usually the main frame)
+                    // This is a fallback - not perfect but better than null
                     for (var i = 0; i < story.textContainers.length; i++) {
                         try {
                             var container = story.textContainers[i];
@@ -195,9 +230,23 @@ try {
                         } catch (e) {}
                     }
                 }
-            } catch (e) {}
+            } catch (e) {
+                $.writeln("Error searching text containers: " + e);
+            }
+            
+            // Method 4: Last resort - get the first text frame from the document
+            try {
+                if (doc.pages.length > 0) {
+                    var firstPage = doc.pages[0];
+                    if (firstPage.textFrames.length > 0) {
+                        return firstPage.textFrames[0];
+                    }
+                }
+            } catch (e) {
+                $.writeln("Error getting first page text frame: " + e);
+            }
         } catch (e) {
-            // Return null if we can't find it
+            $.writeln("Error in getTableParentFrame: " + e);
         }
         return null;
     }
