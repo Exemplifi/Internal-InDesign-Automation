@@ -310,19 +310,34 @@ try {
                         $.writeln("Parent frame size: " + frameW.toFixed(2) + "pt × " + frameH.toFixed(2) + "pt");
                         $.writeln("Table vs frame: " + ((tbl.width / frameW) * 100).toFixed(1) + "% width, " + ((tbl.height / frameH) * 100).toFixed(1) + "% height");
                         
-                        // Check if table is taller than frame
-                        if (tbl.height > frameH) {
-                            $.writeln("⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)");
-                            $.writeln("   This table CANNOT fit in one frame - page breaks MUST work!");
-                        }
-                    } else {
-                        $.writeln("⚠️ WARNING: Could not find table's parent frame!");
+                    // Check if table is taller than frame
+                    if (tbl.height > frameH) {
+                        var criticalMsg = "⚠️ CRITICAL: Table height (" + tbl.height.toFixed(2) + "pt) > Frame height (" + frameH.toFixed(2) + "pt)\n" +
+                                         "This table CANNOT fit in one frame - page breaks MUST work!";
+                        $.writeln("⚠️ CRITICAL: " + criticalMsg);
+                        alert("🚨 CRITICAL TABLE ISSUE\n\n" + criticalMsg);
                     }
+                } else {
+                    $.writeln("⚠️ WARNING: Could not find table's parent frame!");
+                    alert("⚠️ WARNING\n\nCould not find table's parent frame!\nThis may cause import issues.");
+                }
                     
                     // Check page break status
                     try {
                         var pageBreakStatus = tbl.allowPageBreak ? "enabled" : "disabled";
                         $.writeln("Page breaks: " + pageBreakStatus);
+                        
+                        // Alert if page breaks are disabled and table is tall
+                        if (!tbl.allowPageBreak && parentFrame) {
+                            var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
+                            if (tbl.height > frameH * 0.8) {
+                                alert("⚠️ WARNING: Page breaks DISABLED on tall table!\n\n" +
+                                      "Table height: " + tbl.height.toFixed(2) + "pt\n" +
+                                      "Frame height: " + frameH.toFixed(2) + "pt\n" +
+                                      "This will prevent the table from flowing.\n" +
+                                      "Attempting to enable page breaks...");
+                            }
+                        }
                     } catch (e) {
                         $.writeln("Could not check page breaks: " + e);
                     }
@@ -494,16 +509,58 @@ try {
                                     $.writeln("  Frame: " + oframeW.toFixed(2) + "pt × " + oframeH.toFixed(2) + "pt");
                                     
                                     if (otbl.height > oframeH) {
-                                        $.writeln("  ⚠️ CRITICAL: Table is " + ((otbl.height / oframeH) * 100).toFixed(1) + "% of frame height");
+                                        var heightPct = ((otbl.height / oframeH) * 100).toFixed(1);
+                                        $.writeln("  ⚠️ CRITICAL: Table is " + heightPct + "% of frame height");
                                         $.writeln("  ⚠️ Table MUST split across pages - checking page breaks...");
+                                        
+                                        var pbStatus = "unknown";
+                                        var pbEnabled = false;
                                         try {
-                                            var pbStatus = otbl.allowPageBreak ? "ENABLED" : "DISABLED";
+                                            pbEnabled = otbl.allowPageBreak;
+                                            pbStatus = pbEnabled ? "ENABLED" : "DISABLED";
                                             $.writeln("  Page breaks: " + pbStatus);
-                                            if (!otbl.allowPageBreak) {
+                                            
+                                            if (!pbEnabled) {
                                                 $.writeln("  ❌ THIS IS THE PROBLEM: Page breaks are disabled!");
+                                                alert("🚨 ROOT CAUSE FOUND!\n\n" +
+                                                      "Table is " + heightPct + "% taller than frame.\n" +
+                                                      "Table height: " + otbl.height.toFixed(2) + "pt\n" +
+                                                      "Frame height: " + oframeH.toFixed(2) + "pt\n\n" +
+                                                      "Page breaks are DISABLED!\n\n" +
+                                                      "This is why the table cannot flow.\n" +
+                                                      "Attempting to enable page breaks...");
+                                                
+                                                // Try to enable it NOW
+                                                try {
+                                                    otbl.allowPageBreak = true;
+                                                    for (var pr = 0; pr < otbl.rows.length; pr++) {
+                                                        try {
+                                                            otbl.rows[pr].allowPageBreak = true;
+                                                        } catch (e) {}
+                                                    }
+                                                    story.recompose();
+                                                    $.writeln("  ✓ Page breaks enabled in overflow fix");
+                                                    
+                                                    // Check if it worked
+                                                    if (otbl.allowPageBreak) {
+                                                        alert("✓ Page breaks enabled!\n\nRecomposing story...");
+                                                    } else {
+                                                        alert("❌ FAILED: Page breaks still disabled after attempt!");
+                                                    }
+                                                } catch (e) {
+                                                    $.writeln("  ❌ Failed to enable page breaks: " + e);
+                                                    alert("❌ FAILED to enable page breaks!\n\nError: " + e);
+                                                }
+                                            } else {
+                                                alert("⚠️ Table is " + heightPct + "% taller than frame.\n" +
+                                                      "Page breaks are enabled, but table still not flowing.\n" +
+                                                      "This may be a different issue.\n\n" +
+                                                      "Table: " + otbl.height.toFixed(2) + "pt\n" +
+                                                      "Frame: " + oframeH.toFixed(2) + "pt");
                                             }
                                         } catch (e) {
                                             $.writeln("  Could not check page breaks: " + e);
+                                            alert("⚠️ Could not check page breaks: " + e);
                                         }
                                     }
                                 }
