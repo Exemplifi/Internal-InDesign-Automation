@@ -289,20 +289,179 @@ try {
     $.writeln("Checking for case studies...");
     insertCaseStudies(story);
 
-    // ---- 2c) IMMEDIATE table fix - Handle fixed-width tables right after import ----
-    // Fixed-width tables from Word can cause overflow because they're set to specific widths
-    // that may not fit the InDesign frame. We need to detect and resize them aggressively.
-    // CRITICAL: Also enable page breaks so tables can split across pages.
+    // ---- 2c) Check for tables that cross pages and skip them ----
+    // Helper function to check if a table crosses pages
+    function tableCrossesPages(table) {
+        try {
+            var parentFrame = getTableParentFrame(table);
+            if (!parentFrame) {
+                $.writeln("  Cannot determine if table crosses pages - no parent frame");
+                return false;
+            }
+            
+            var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
+            var tableH = table.height;
+            
+            // Check 1: Table height > frame height
+            if (tableH > frameH) {
+                $.writeln("  Table crosses pages: height " + tableH.toFixed(2) + "pt > frame " + frameH.toFixed(2) + "pt");
+                return true;
+            }
+            
+            // Check 2: Table spans multiple text containers
+            try {
+                var tableStory = table.parentStory;
+                if (tableStory) {
+                    // Get all text containers that contain this table
+                    var containersWithTable = [];
+                    for (var c = 0; c < tableStory.textContainers.length; c++) {
+                        try {
+                            var container = tableStory.textContainers[c];
+                            // Check if this container has the table by checking if table's first cell is in it
+                            var firstCell = table.cells[0];
+                            if (firstCell && firstCell.texts.length > 0) {
+                                var cellText = firstCell.texts[0];
+                                if (cellText.parentTextFrames && cellText.parentTextFrames.length > 0) {
+                                    for (var tf = 0; tf < cellText.parentTextFrames.length; tf++) {
+                                        if (cellText.parentTextFrames[tf] === container) {
+                                            containersWithTable.push(container);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                    
+                    // If table is in multiple containers, it crosses pages
+                    if (containersWithTable.length > 1) {
+                        $.writeln("  Table crosses pages: spans " + containersWithTable.length + " text containers");
+                        return true;
+                    }
+                }
+            } catch (e) {
+                $.writeln("  Could not check text containers: " + e);
+            }
+            
+            return false;
+        } catch (e) {
+            $.writeln("  Error checking if table crosses pages: " + e);
+            return false;
+        }
+    }
+    
+    // Helper function to remove table and insert marker
+    function removeTableAndInsertMarker(table, tableIndex) {
+        try {
+            $.writeln("  Removing table " + tableIndex + " and inserting marker...");
+            
+            // Find insertion point - get the first character of the table's first cell
+            var insertIndex = -1;
+            try {
+                var firstCell = table.cells[0];
+                if (firstCell && firstCell.texts.length > 0) {
+                    var firstText = firstCell.texts[0];
+                    if (firstText.characters.length > 0) {
+                        insertIndex = firstText.characters[0].index;
+                    }
+                }
+            } catch (e) {
+                $.writeln("    Could not get table insertion point: " + e);
+            }
+            
+            // Delete the table
+            try {
+                table.remove();
+                $.writeln("    Table removed successfully");
+            } catch (e) {
+                $.writeln("    Error removing table: " + e);
+                return false;
+            }
+            
+            // Insert marker text
+            if (insertIndex >= 0) {
+                try {
+                    var markerText = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
+                    story.insertionPoints[insertIndex].contents = markerText;
+                    $.writeln("    Marker text inserted at index " + insertIndex);
+                    return true;
+                } catch (e) {
+                    $.writeln("    Error inserting marker text: " + e);
+                    // Try inserting at end of story as fallback
+                    try {
+                        story.insertionPoints[-1].contents = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
+                        $.writeln("    Marker text inserted at end of story (fallback)");
+                        return true;
+                    } catch (e2) {
+                        $.writeln("    Could not insert marker text: " + e2);
+                        return false;
+                    }
+                }
+            } else {
+                // Fallback: insert at end
+                try {
+                    story.insertionPoints[-1].contents = "\r<<TABLE SKIPPED. PLEASE IMPORT MANUALLY>>\r";
+                    $.writeln("    Marker text inserted at end of story (fallback - no index)");
+                    return true;
+                } catch (e) {
+                    $.writeln("    Could not insert marker text: " + e);
+                    return false;
+                }
+            }
+        } catch (e) {
+            $.writeln("  Error in removeTableAndInsertMarker: " + e);
+            return false;
+        }
+    }
+    
+    // Check all tables and skip those that cross pages
+    // Process in reverse order to maintain indices
+    var tablesToSkip = [];
     var tableCount = story.tables.length;
     $.writeln("Found " + tableCount + " table(s) in document");
     
-    // Alert user about tables found (critical diagnostic)
     if (tableCount > 0) {
         alert("📊 Found " + tableCount + " table(s) in document.\n" +
-              "Processing tables now...");
+              "Checking for tables that cross pages...");
+        
+        // Check each table
+        for (var ts = 0; ts < story.tables.length; ts++) {
+            try {
+                var checkTbl = story.tables[ts];
+                $.writeln("Checking table " + ts + " for page crossing...");
+                
+                if (tableCrossesPages(checkTbl)) {
+                    $.writeln("  ✓ Table " + ts + " crosses pages - will be skipped");
+                    tablesToSkip.push({table: checkTbl, index: ts});
+                } else {
+                    $.writeln("  ✓ Table " + ts + " fits on one page - will be imported");
+                }
+            } catch (e) {
+                $.writeln("  Error checking table " + ts + ": " + e);
+            }
+        }
+        
+        // Remove tables that cross pages (process in reverse to maintain indices)
+        if (tablesToSkip.length > 0) {
+            alert("⚠️ Found " + tablesToSkip.length + " table(s) that cross pages.\n" +
+                  "These will be skipped and replaced with markers.\n" +
+                  "Other tables will be imported normally.");
+            
+            for (var skipIdx = tablesToSkip.length - 1; skipIdx >= 0; skipIdx--) {
+                var skipTable = tablesToSkip[skipIdx];
+                if (removeTableAndInsertMarker(skipTable.table, skipTable.index)) {
+                    $.writeln("✓ Skipped table " + skipTable.index + " - marker inserted");
+                } else {
+                    $.writeln("✗ Failed to skip table " + skipTable.index);
+                }
+            }
+            
+            // Recompose after removing tables
+            story.recompose();
+            $.writeln("Skipped " + tablesToSkip.length + " table(s) that cross pages");
+        }
     } else {
         // Check if there might be table-like content that wasn't converted
-        // This can happen if Word tables aren't properly converted during import
         var storyText = story.contents;
         var hasTabSeparatedContent = storyText.indexOf("\t") !== -1;
         if (hasTabSeparatedContent) {
@@ -311,6 +470,11 @@ try {
                   "Check import preferences.");
         }
     }
+    
+    // ---- 2d) Process remaining tables (those that don't cross pages) ----
+    // Fixed-width tables from Word can cause overflow because they're set to specific widths
+    // that may not fit the InDesign frame. We need to detect and resize them aggressively.
+    // CRITICAL: Also enable page breaks so tables can split across pages.
     if (story.tables.length) {
         for (var t=0; t<story.tables.length; t++) {
             try {
