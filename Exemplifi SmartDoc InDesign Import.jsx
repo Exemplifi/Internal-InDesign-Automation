@@ -8,26 +8,6 @@
 // Supports:
 //   [TABLE] ... [/TABLE]
 //   [CASESTUDY] / [CASE STUDY] ... [/CASESTUDY] / [/CASE STUDY]
-//
-// ============================================================================
-// DEBUG ALERTS TO REMOVE AFTER TESTING:
-// ============================================================================
-// Search for "DEBUG ALERT #" to find all debug statements:
-//   #1:  Initial table count (line ~370)
-//   #2:  Checking each table (line ~380)
-//   #3:  Table identified as crossing pages (line ~390)
-//   #4:  Table fits on one page (line ~400)
-//   #5:  Error checking table (line ~410)
-//   #6:  Starting to skip tables (line ~420)
-//   #7:  About to skip a table (line ~430)
-//   #8:  Successfully skipped table (line ~440)
-//   #9:  Failed to skip table (line ~450)
-//   #10: Final summary (line ~460)
-//   #11: No tables to skip (line ~470)
-//   #12: No tables found (line ~480)
-//   #13: Marker inserted at index (line ~310)
-//   #14: Failed to insert at index, using fallback (line ~320)
-// ============================================================================
 
 #target "InDesign"
 
@@ -325,18 +305,9 @@ try {
                 try {
                     story.insertionPoints[insertIndex].contents = markerText;
                     $.writeln("    Marker text inserted at index " + insertIndex);
-                    
-                    // DEBUG ALERT #13: Marker inserted at index - REMOVE AFTER TESTING
-                    alert("✓ DEBUG: Marker inserted at index " + insertIndex + "\n" +
-                          "Marker text: <<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>");
                 } catch (e) {
                     $.writeln("    Error inserting marker text at index: " + e);
                     insertIndex = -1; // Will use fallback
-                    
-                    // DEBUG ALERT #14: Failed to insert at index, using fallback - REMOVE AFTER TESTING
-                    alert("⚠️ DEBUG: Failed to insert marker at index " + insertIndex + "\n" +
-                          "Error: " + e + "\n" +
-                          "Will try fallback method...");
                 }
             }
             
@@ -395,11 +366,6 @@ try {
     var tableCount = story.tables.length;
     $.writeln("Found " + tableCount + " table(s) in document");
     
-    // DEBUG ALERT #1: Initial table count - REMOVE AFTER TESTING
-    if (tableCount > 0) {
-        alert("🔍 DEBUG: Found " + tableCount + " table(s) in document.\nStarting table cross-page check...");
-    }
-    
     if (tableCount > 0) {
         // Check each table
         for (var ts = 0; ts < story.tables.length; ts++) {
@@ -407,37 +373,14 @@ try {
                 var checkTbl = story.tables[ts];
                 $.writeln("Checking table " + ts + " for page crossing...");
                 
-                // DEBUG ALERT #2: Checking each table - REMOVE AFTER TESTING
-                var parentFrame = getTableParentFrame(checkTbl);
-                var frameH = parentFrame ? (parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0]) : 0;
-                var tableH = checkTbl.height;
-                alert("🔍 DEBUG: Checking table " + (ts + 1) + " of " + tableCount + "\n" +
-                      "Table height: " + tableH.toFixed(2) + "pt\n" +
-                      "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                      "Checking if it crosses pages...");
-                
                 if (tableCrossesPages(checkTbl)) {
                     $.writeln("  ✓ Table " + ts + " crosses pages - will be skipped");
                     tablesToSkip.push({table: checkTbl, index: ts});
-                    
-                    // DEBUG ALERT #3: Table identified as crossing pages - REMOVE AFTER TESTING
-                    alert("⚠️ DEBUG: Table " + (ts + 1) + " CROSSES PAGES!\n" +
-                          "Table height: " + tableH.toFixed(2) + "pt\n" +
-                          "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                          "This table will be skipped and replaced with a marker.");
                 } else {
                     $.writeln("  ✓ Table " + ts + " fits on one page - will be imported");
-                    
-                    // DEBUG ALERT #4: Table fits on one page - REMOVE AFTER TESTING
-                    alert("✓ DEBUG: Table " + (ts + 1) + " fits on one page.\n" +
-                          "Table height: " + tableH.toFixed(2) + "pt\n" +
-                          "Frame height: " + frameH.toFixed(2) + "pt\n" +
-                          "This table will be imported normally.");
                 }
             } catch (e) {
                 $.writeln("  Error checking table " + ts + ": " + e);
-                // DEBUG ALERT #5: Error checking table - REMOVE AFTER TESTING
-                alert("❌ DEBUG: Error checking table " + (ts + 1) + ":\n" + e);
             }
         }
         
@@ -445,30 +388,12 @@ try {
         if (tablesToSkip.length > 0) {
             $.writeln("Found " + tablesToSkip.length + " table(s) that cross pages - skipping them");
             
-            // DEBUG ALERT #6: Starting to skip tables - REMOVE AFTER TESTING
-            alert("🔄 DEBUG: Starting to skip " + tablesToSkip.length + " table(s) that cross pages.\n" +
-                  "Each table will be removed and replaced with:\n" +
-                  "<<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>");
-            
             for (var skipIdx = tablesToSkip.length - 1; skipIdx >= 0; skipIdx--) {
                 var skipTable = tablesToSkip[skipIdx];
-                
-                // DEBUG ALERT #7: About to skip a table - REMOVE AFTER TESTING
-                alert("🔄 DEBUG: About to skip table " + (skipTable.index + 1) + "\n" +
-                      "Removing table and inserting marker...");
-                
                 if (removeTableAndInsertMarker(skipTable.table, skipTable.index)) {
                     $.writeln("✓ Skipped table " + skipTable.index + " - marker inserted");
-                    
-                    // DEBUG ALERT #8: Successfully skipped table - REMOVE AFTER TESTING
-                    alert("✓ DEBUG: Successfully skipped table " + (skipTable.index + 1) + "\n" +
-                          "Marker text has been inserted.");
                 } else {
                     $.writeln("✗ Failed to skip table " + skipTable.index);
-                    
-                    // DEBUG ALERT #9: Failed to skip table - REMOVE AFTER TESTING
-                    alert("❌ DEBUG: FAILED to skip table " + (skipTable.index + 1) + "\n" +
-                          "Marker may not have been inserted correctly.");
                 }
             }
             
@@ -476,19 +401,16 @@ try {
             story.recompose();
             $.writeln("Skipped " + tablesToSkip.length + " table(s) that cross pages");
             
-            // DEBUG ALERT #10: Final summary - REMOVE AFTER TESTING
-            alert("✅ DEBUG: Table skip process complete!\n" +
-                  "Skipped: " + tablesToSkip.length + " table(s)\n" +
-                  "Remaining: " + (tableCount - tablesToSkip.length) + " table(s) imported normally");
-        } else {
-            // DEBUG ALERT #11: No tables to skip - REMOVE AFTER TESTING
-            alert("✅ DEBUG: All " + tableCount + " table(s) fit on one page.\n" +
-                  "No tables were skipped. All tables will be imported normally.");
+            // Inform user about skipped tables
+            var skippedMsg = "⚠️ Table Import Notice\n\n";
+            skippedMsg += tablesToSkip.length === 1 
+                ? "1 table that crosses page boundaries has been skipped.\n\n"
+                : tablesToSkip.length + " tables that cross page boundaries have been skipped.\n\n";
+            skippedMsg += "These tables have been replaced with the marker:\n";
+            skippedMsg += "<<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>\n\n";
+            skippedMsg += "Please import these tables manually.";
+            alert(skippedMsg);
         }
-    } else {
-        // DEBUG ALERT #12: No tables found - REMOVE AFTER TESTING
-        alert("ℹ️ DEBUG: No tables found in document.\n" +
-              "Skipping table cross-page check.");
     }
 
     // ---- Continue threading pages ----
