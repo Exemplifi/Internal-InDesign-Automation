@@ -3,10 +3,31 @@
 // - Case Study Insertion (correct placement)
 // - Robust Hyperlink Detection
 // - Headings, Bullets, Bold
+// - Table Cross-Page Detection and Skipping
 //
 // Supports:
 //   [TABLE] ... [/TABLE]
 //   [CASESTUDY] / [CASE STUDY] ... [/CASESTUDY] / [/CASE STUDY]
+//
+// ============================================================================
+// DEBUG ALERTS TO REMOVE AFTER TESTING:
+// ============================================================================
+// Search for "DEBUG ALERT #" to find all debug statements:
+//   #1:  Initial table count (line ~370)
+//   #2:  Checking each table (line ~380)
+//   #3:  Table identified as crossing pages (line ~390)
+//   #4:  Table fits on one page (line ~400)
+//   #5:  Error checking table (line ~410)
+//   #6:  Starting to skip tables (line ~420)
+//   #7:  About to skip a table (line ~430)
+//   #8:  Successfully skipped table (line ~440)
+//   #9:  Failed to skip table (line ~450)
+//   #10: Final summary (line ~460)
+//   #11: No tables to skip (line ~470)
+//   #12: No tables found (line ~480)
+//   #13: Marker inserted at index (line ~310)
+//   #14: Failed to insert at index, using fallback (line ~320)
+// ============================================================================
 
 #target "InDesign"
 
@@ -124,6 +145,351 @@ try {
 
     // ---- 2b) CRITICAL — INSERT CASE STUDIES NOW (BEFORE ANY REFLOW) ----
     insertCaseStudies(story);
+
+    // ---- 2c) Check for tables that cross pages and skip them ----
+    // Helper function to safely get parent text frame of a table
+    function getTableParentFrame(table) {
+        try {
+            // Method 1: Try to get parent directly
+            try {
+                var parent = table.parent;
+                if (parent) {
+                    // Check if parent is a TextFrame (has geometricBounds and overflows)
+                    try {
+                        if (parent.geometricBounds && typeof parent.overflows !== 'undefined') {
+                            return parent;
+                        }
+                    } catch (e) {}
+                    
+                    // If parent is a Cell, traverse up
+                    try {
+                        if (parent.constructor && parent.constructor.name === "Cell") {
+                            var cellParent = parent.parent;
+                            if (cellParent) {
+                                // Cell's parent might be a Table or TextFrame
+                                try {
+                                    if (cellParent.geometricBounds && typeof cellParent.overflows !== 'undefined') {
+                                        return cellParent;
+                                    }
+                                } catch (e) {}
+                                // If cell's parent is another table, go up one more level
+                                if (cellParent.constructor && cellParent.constructor.name === "Table") {
+                                    var tableParent = cellParent.parent;
+                                    if (tableParent && tableParent.geometricBounds) {
+                                        return tableParent;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }
+            } catch (e) {
+                $.writeln("Error getting table.parent: " + e);
+            }
+            
+            // Method 2: Get table's first cell and find its text frame
+            try {
+                var firstCell = table.cells[0];
+                if (firstCell) {
+                    var cellTexts = firstCell.texts;
+                    if (cellTexts.length > 0) {
+                        var cellText = cellTexts[0];
+                        if (cellText && cellText.parentTextFrames && cellText.parentTextFrames.length > 0) {
+                            return cellText.parentTextFrames[0];
+                        }
+                    }
+                }
+            } catch (e) {
+                $.writeln("Error getting cell text frame: " + e);
+            }
+            
+            // Method 3: Use story's text containers (find the one that contains this table)
+            try {
+                var tableStory = table.parentStory;
+                if (tableStory && tableStory.textContainers.length > 0) {
+                    // Return the first text container (usually the main frame)
+                    // This is a fallback - not perfect but better than null
+                    for (var i = 0; i < tableStory.textContainers.length; i++) {
+                        try {
+                            var container = tableStory.textContainers[i];
+                            if (container.geometricBounds) {
+                                return container;
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {
+                $.writeln("Error searching text containers: " + e);
+            }
+            
+            // Method 4: Last resort - get the first text frame from the document
+            try {
+                if (doc.pages.length > 0) {
+                    var firstPage = doc.pages[0];
+                    if (firstPage.textFrames.length > 0) {
+                        return firstPage.textFrames[0];
+                    }
+                }
+            } catch (e) {
+                $.writeln("Error getting first page text frame: " + e);
+            }
+        } catch (e) {
+            $.writeln("Error in getTableParentFrame: " + e);
+        }
+        return null;
+    }
+    
+    // Helper function to check if a table crosses pages
+    function tableCrossesPages(table) {
+        try {
+            var parentFrame = getTableParentFrame(table);
+            if (!parentFrame) {
+                $.writeln("  Cannot determine if table crosses pages - no parent frame");
+                return false;
+            }
+            
+            var frameH = parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0];
+            var tableH = table.height;
+            
+            // Check 1: Table height > frame height
+            if (tableH > frameH) {
+                $.writeln("  Table crosses pages: height " + tableH.toFixed(2) + "pt > frame " + frameH.toFixed(2) + "pt");
+                return true;
+            }
+            
+            // Check 2: Table spans multiple text containers
+            try {
+                var tableStory = table.parentStory;
+                if (tableStory) {
+                    // Get all text containers that contain this table
+                    var containersWithTable = [];
+                    for (var c = 0; c < tableStory.textContainers.length; c++) {
+                        try {
+                            var container = tableStory.textContainers[c];
+                            // Check if this container has the table by checking if table's first cell is in it
+                            var firstCell = table.cells[0];
+                            if (firstCell && firstCell.texts.length > 0) {
+                                var cellText = firstCell.texts[0];
+                                if (cellText.parentTextFrames && cellText.parentTextFrames.length > 0) {
+                                    for (var tf = 0; tf < cellText.parentTextFrames.length; tf++) {
+                                        if (cellText.parentTextFrames[tf] === container) {
+                                            containersWithTable.push(container);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                    
+                    // If table is in multiple containers, it crosses pages
+                    if (containersWithTable.length > 1) {
+                        $.writeln("  Table crosses pages: spans " + containersWithTable.length + " text containers");
+                        return true;
+                    }
+                }
+            } catch (e) {
+                $.writeln("  Could not check text containers: " + e);
+            }
+            
+            return false;
+        } catch (e) {
+            $.writeln("  Error checking if table crosses pages: " + e);
+            return false;
+        }
+    }
+    
+    // Helper function to remove table and insert marker
+    function removeTableAndInsertMarker(table, tableIndex) {
+        try {
+            $.writeln("  Removing table " + tableIndex + " and inserting marker...");
+            
+            // Find insertion point BEFORE removing table - get the first character of the table's first cell
+            var insertIndex = -1;
+            var markerText = "\r<<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>\r";
+            
+            try {
+                var firstCell = table.cells[0];
+                if (firstCell && firstCell.texts.length > 0) {
+                    var firstText = firstCell.texts[0];
+                    if (firstText.characters.length > 0) {
+                        insertIndex = firstText.characters[0].index;
+                    }
+                }
+            } catch (e) {
+                $.writeln("    Could not get table insertion point: " + e);
+            }
+            
+            // Insert marker text BEFORE removing table (so index is still valid)
+            if (insertIndex >= 0) {
+                try {
+                    story.insertionPoints[insertIndex].contents = markerText;
+                    $.writeln("    Marker text inserted at index " + insertIndex);
+                    
+                    // DEBUG ALERT #13: Marker inserted at index - REMOVE AFTER TESTING
+                    alert("✓ DEBUG: Marker inserted at index " + insertIndex + "\n" +
+                          "Marker text: <<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>");
+                } catch (e) {
+                    $.writeln("    Error inserting marker text at index: " + e);
+                    insertIndex = -1; // Will use fallback
+                    
+                    // DEBUG ALERT #14: Failed to insert at index, using fallback - REMOVE AFTER TESTING
+                    alert("⚠️ DEBUG: Failed to insert marker at index " + insertIndex + "\n" +
+                          "Error: " + e + "\n" +
+                          "Will try fallback method...");
+                }
+            }
+            
+            // Delete the table
+            try {
+                table.remove();
+                $.writeln("    Table removed successfully");
+            } catch (e) {
+                $.writeln("    Error removing table: " + e);
+                // If marker was inserted but table removal failed, that's okay - marker is there
+                if (insertIndex >= 0) return true;
+                return false;
+            }
+            
+            // If marker wasn't inserted before removal, try fallback methods
+            if (insertIndex < 0) {
+                // Try to find where table was by looking for text before/after
+                try {
+                    // Find the last non-overflowing frame and insert there
+                    for (var f = story.textContainers.length - 1; f >= 0; f--) {
+                        try {
+                            var container = story.textContainers[f];
+                            if (!container.overflows && container.parentStory) {
+                                var lastChar = container.parentStory.characters[-1];
+                                story.insertionPoints[lastChar.index + 1].contents = markerText;
+                                $.writeln("    Marker text inserted after last placed content (fallback)");
+                                return true;
+                            }
+                        } catch (e) {}
+                    }
+                } catch (e) {
+                    $.writeln("    Fallback insertion failed: " + e);
+                }
+                
+                // Last resort: insert at end of story
+                try {
+                    story.insertionPoints[-1].contents = markerText;
+                    $.writeln("    Marker text inserted at end of story (last resort)");
+                    return true;
+                } catch (e) {
+                    $.writeln("    Could not insert marker text: " + e);
+                    return false;
+                }
+            }
+            
+            return true;
+        } catch (e) {
+            $.writeln("  Error in removeTableAndInsertMarker: " + e);
+            return false;
+        }
+    }
+    
+    // Check all tables and skip those that cross pages
+    // Process in reverse order to maintain indices
+    var tablesToSkip = [];
+    var tableCount = story.tables.length;
+    $.writeln("Found " + tableCount + " table(s) in document");
+    
+    // DEBUG ALERT #1: Initial table count - REMOVE AFTER TESTING
+    if (tableCount > 0) {
+        alert("🔍 DEBUG: Found " + tableCount + " table(s) in document.\nStarting table cross-page check...");
+    }
+    
+    if (tableCount > 0) {
+        // Check each table
+        for (var ts = 0; ts < story.tables.length; ts++) {
+            try {
+                var checkTbl = story.tables[ts];
+                $.writeln("Checking table " + ts + " for page crossing...");
+                
+                // DEBUG ALERT #2: Checking each table - REMOVE AFTER TESTING
+                var parentFrame = getTableParentFrame(checkTbl);
+                var frameH = parentFrame ? (parentFrame.geometricBounds[2] - parentFrame.geometricBounds[0]) : 0;
+                var tableH = checkTbl.height;
+                alert("🔍 DEBUG: Checking table " + (ts + 1) + " of " + tableCount + "\n" +
+                      "Table height: " + tableH.toFixed(2) + "pt\n" +
+                      "Frame height: " + frameH.toFixed(2) + "pt\n" +
+                      "Checking if it crosses pages...");
+                
+                if (tableCrossesPages(checkTbl)) {
+                    $.writeln("  ✓ Table " + ts + " crosses pages - will be skipped");
+                    tablesToSkip.push({table: checkTbl, index: ts});
+                    
+                    // DEBUG ALERT #3: Table identified as crossing pages - REMOVE AFTER TESTING
+                    alert("⚠️ DEBUG: Table " + (ts + 1) + " CROSSES PAGES!\n" +
+                          "Table height: " + tableH.toFixed(2) + "pt\n" +
+                          "Frame height: " + frameH.toFixed(2) + "pt\n" +
+                          "This table will be skipped and replaced with a marker.");
+                } else {
+                    $.writeln("  ✓ Table " + ts + " fits on one page - will be imported");
+                    
+                    // DEBUG ALERT #4: Table fits on one page - REMOVE AFTER TESTING
+                    alert("✓ DEBUG: Table " + (ts + 1) + " fits on one page.\n" +
+                          "Table height: " + tableH.toFixed(2) + "pt\n" +
+                          "Frame height: " + frameH.toFixed(2) + "pt\n" +
+                          "This table will be imported normally.");
+                }
+            } catch (e) {
+                $.writeln("  Error checking table " + ts + ": " + e);
+                // DEBUG ALERT #5: Error checking table - REMOVE AFTER TESTING
+                alert("❌ DEBUG: Error checking table " + (ts + 1) + ":\n" + e);
+            }
+        }
+        
+        // Remove tables that cross pages (process in reverse to maintain indices)
+        if (tablesToSkip.length > 0) {
+            $.writeln("Found " + tablesToSkip.length + " table(s) that cross pages - skipping them");
+            
+            // DEBUG ALERT #6: Starting to skip tables - REMOVE AFTER TESTING
+            alert("🔄 DEBUG: Starting to skip " + tablesToSkip.length + " table(s) that cross pages.\n" +
+                  "Each table will be removed and replaced with:\n" +
+                  "<<TABLE HAS BEEN SKIPPED. PLEASE INSERT MANUALLY>>");
+            
+            for (var skipIdx = tablesToSkip.length - 1; skipIdx >= 0; skipIdx--) {
+                var skipTable = tablesToSkip[skipIdx];
+                
+                // DEBUG ALERT #7: About to skip a table - REMOVE AFTER TESTING
+                alert("🔄 DEBUG: About to skip table " + (skipTable.index + 1) + "\n" +
+                      "Removing table and inserting marker...");
+                
+                if (removeTableAndInsertMarker(skipTable.table, skipTable.index)) {
+                    $.writeln("✓ Skipped table " + skipTable.index + " - marker inserted");
+                    
+                    // DEBUG ALERT #8: Successfully skipped table - REMOVE AFTER TESTING
+                    alert("✓ DEBUG: Successfully skipped table " + (skipTable.index + 1) + "\n" +
+                          "Marker text has been inserted.");
+                } else {
+                    $.writeln("✗ Failed to skip table " + skipTable.index);
+                    
+                    // DEBUG ALERT #9: Failed to skip table - REMOVE AFTER TESTING
+                    alert("❌ DEBUG: FAILED to skip table " + (skipTable.index + 1) + "\n" +
+                          "Marker may not have been inserted correctly.");
+                }
+            }
+            
+            // Recompose after removing tables
+            story.recompose();
+            $.writeln("Skipped " + tablesToSkip.length + " table(s) that cross pages");
+            
+            // DEBUG ALERT #10: Final summary - REMOVE AFTER TESTING
+            alert("✅ DEBUG: Table skip process complete!\n" +
+                  "Skipped: " + tablesToSkip.length + " table(s)\n" +
+                  "Remaining: " + (tableCount - tablesToSkip.length) + " table(s) imported normally");
+        } else {
+            // DEBUG ALERT #11: No tables to skip - REMOVE AFTER TESTING
+            alert("✅ DEBUG: All " + tableCount + " table(s) fit on one page.\n" +
+                  "No tables were skipped. All tables will be imported normally.");
+        }
+    } else {
+        // DEBUG ALERT #12: No tables found - REMOVE AFTER TESTING
+        alert("ℹ️ DEBUG: No tables found in document.\n" +
+              "Skipping table cross-page check.");
+    }
 
     // ---- Continue threading pages ----
     while (story.overflows) {
