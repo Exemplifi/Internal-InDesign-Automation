@@ -564,7 +564,6 @@ try {
             // Recompose after removing tables
             story.recompose();
             $.writeln("Skipped " + tablesToSkip.length + " table(s) that cross pages");
-<<<<<<< HEAD
             
             // Inform user about skipped tables
             var skippedMsg = "⚠️ Table Import Notice\n\n";
@@ -578,14 +577,6 @@ try {
         }
     }
 
-    // ---- Continue threading pages ----
-    while (story.overflows) {
-        var last = doc.pages[-1];
-        var np = doc.pages.add(LocationOptions.AFTER, last);
-        var nf = makeFrame(np);
-        story.textContainers[story.textContainers.length - 1].nextTextFrame = nf;
-    }
-    
     // ---- 2d) Process remaining tables (those that don't cross pages) ----
     // Fixed-width tables from Word can cause overflow because they're set to specific widths
     // that may not fit the InDesign frame. We need to detect and resize them aggressively.
@@ -1046,7 +1037,6 @@ try {
     }
     
     while (story.overflows && pageCount < maxPages) {
->>>>>>> 91bd51fb66eb438fdc13e04059317dc150c31c47
         var last = doc.pages[-1];
         var np = doc.pages.add(LocationOptions.AFTER, last);
         var nf = makeFrame(np);
